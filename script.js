@@ -258,7 +258,7 @@ function renderRecent(){
   box.innerHTML=list.map(t=>{const r=tradeRet(t),c=pcls(r);
     return `<div class="rrow ${c}" data-id="${t.id}"><div class="rbar"></div>
       <div class="rinfo"><span class="rdate mono">${fmtDate(t.date)}</span>
-      <span class="rasset">${esc(t.asset)||'—'} <span class="badge ${t.position.toLowerCase()} sm">${t.position==='LONG'?'▲':'▼'} ${t.position}</span>${t.demo?'<span class="demo-tag">DEMO</span>':''}</span></div>
+      <span class="rasset">${esc(t.asset)||'—'} <span class="badge ${t.position.toLowerCase()} sm">${t.position==='LONG'?'▲':'▼'} ${t.position}</span></span></div>
       <span class="rret mono ${c}">${fmtPct(r)}</span></div>`}).join('');
 }
 
@@ -290,7 +290,7 @@ function renderCalDetail(){
   if(!t){box.innerHTML=`<div class="cd-empty"><b>${fmtDateLong(state.selDay)}</b><p>Tidak ada trade. Hari tanpa trade adalah istirahat yang sah — bukan pelanggaran aturan.</p></div>`;return}
   const r=tradeRet(t),c=pcls(r);
   box.innerHTML=`<div class="cd-head">
-      <div><div class="cd-date">${fmtDateLong(t.date)}${t.demo?' <span class="demo-tag">DEMO</span>':''}</div>
+      <div><div class="cd-date">${fmtDateLong(t.date)}</div>
       <div class="cd-asset">${esc(t.asset)||'Tanpa aset'} · <span class="badge ${t.position.toLowerCase()}">${t.position==='LONG'?'▲':'▼'} ${t.position}</span></div></div>
       <div class="cd-ret ${c}">${fmtPct(r)}</div></div>
     <div class="cd-grid mono"><span>Entry <b>${fmtPrice(t.entry)}</b></span><span>Exit <b>${fmtPrice(t.exit)}</b></span>${t.lot!=null?`<span>Lot <b>${Number(t.lot).toFixed(2)}</b></span>`:''}</div>
@@ -313,12 +313,12 @@ function filteredJournal(){const{q,pos,from,to}=state.j;
 function renderTable(){
   const rows=filteredJournal(),tb=$('#tbody');
   $('#tblCount').textContent=`Menampilkan ${rows.length} dari ${trades.length} trade`;
-  if(!rows.length){tb.innerHTML=`<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:34px">${trades.length?'Tidak ada trade yang cocok dengan filter.':'Belum ada trade — catat trade pertamamu melalui formulir, atau muat data DEMO dari sidebar.'}</td></tr>`;return}
+  if(!rows.length){tb.innerHTML=`<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:34px">${trades.length?'Tidak ada trade yang cocok dengan filter.':'Belum ada trade — catat trade pertamamu melalui formulir di samping.'}</td></tr>`;return}
   tb.innerHTML=rows.map(t=>{const r=tradeRet(t),c=pcls(r);
     const res=r>0?['win','PROFIT']:r<0?['loss','LOSS']:['bee','BE'];
     const ex=state.expanded===t.id;
     let html=`<tr class="trow ${c}${ex?' open':''}" data-id="${t.id}">
-      <td class="mono">${fmtDate(t.date)}${t.demo?'<span class="demo-tag">DEMO</span>':''}</td>
+      <td class="mono">${fmtDate(t.date)}</td>
       <td>${esc(t.asset)||'<span class="dim">—</span>'}</td>
       <td><span class="badge ${t.position.toLowerCase()}">${t.position==='LONG'?'▲':'▼'} ${t.position}</span></td>
       <td class="mono r">${t.lot!=null?Number(t.lot).toFixed(2):'<span class="dim">—</span>'}</td>
@@ -417,7 +417,7 @@ $('#tradeForm').addEventListener('submit',e=>{
     Object.assign(t,{date,asset,position:formPos,entry,exit,lot,notes});
     toast('Perubahan trade disimpan');
   }else{
-    trades.push({id:uid(),date,asset,position:formPos,entry,exit,lot,notes,demo:false,createdAt:Date.now()});
+    trades.push({id:uid(),date,asset,position:formPos,entry,exit,lot,notes,createdAt:Date.now()});
     toast('Trade berhasil dicatat');
   }
   saveTrades();state.editingId=null;resetForm();updateFormUI();renderAll();
@@ -455,7 +455,7 @@ function exportCSV(list,name){
   const head=['Tanggal','Aset','Posisi','Harga Entry','Harga Exit','Return (%)','Lot','Catatan','Sumber'];
   const q=v=>{v=v==null?'':String(v);return /[",\n;]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
   const lines=[head.join(',')];
-  list.forEach(t=>lines.push([t.date,t.asset||'',t.position,t.entry,t.exit,tradeRet(t).toFixed(4),t.lot!=null?Number(t.lot).toFixed(2):'',t.notes??'',t.demo?'DEMO':'REAL'].map(q).join(',')));
+  list.forEach(t=>lines.push([t.date,t.asset||'',t.position,t.entry,t.exit,tradeRet(t).toFixed(4),t.lot!=null?Number(t.lot).toFixed(2):'',t.notes??'','REAL'].map(q).join(',')));
   const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${name}_${todayISO()}.csv`;a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),2000);
@@ -596,39 +596,7 @@ function renderAnalytics(){
   renderVS(arr);renderHist();renderDDChart();renderConsist(arr);renderMonthly(arr);renderInsights(arr,m);
 }
 
-/* ================= DEMO & kelola data ================= */
-const DEMO=[
-  [31,'EURUSD','LONG',1.08320,0.85,0.10,'Breakout resistance minor sesi London; momentum berlanjut, exit sesuai plan.'],
-  [29,'XAUUSD','SHORT',2687.40,1.20,0.05,'Rejection di supply H4 + DXY menguat. Entry limit, stop ketat di atas wick.'],
-  [28,'BTCUSDT','LONG',96150,2.40,0.02,'Reclaim level kunci setelah konsolidasi 3 hari; volume meningkat.'],
-  [26,'XAUUSD','LONG',2699.10,-0.85,0.05,'Follow trend setelah koreksi, ternyata false break. Cut loss sesuai aturan.'],
-  [24,'EURUSD','SHORT',1.09140,-1.10,0.10,'Fade spike berita; ternyata lebih hawkish dari ekspektasi, keluar cepat.'],
-  [23,'GBPUSD','SHORT',1.27480,-1.65,0.08,'Counter-trend tanpa konfirmasi — kesalahan disiplin. Evaluasi: tunggu struktur.'],
-  [21,'XAUUSD','LONG',2661.75,0.55,0.05,'Re-entry setelah setup valid; sizing diperkecil pasca loss beruntun.'],
-  [20,'BTCUSDT','SHORT',99800,0.00,0.02,'Range bound; entry di tengah range, harga tidak bergerak, exit impas sebelum sesi NY.'],
-  [17,'XAUUSD','LONG',2648.90,3.10,0.05,'Setup A+: demand H4 + divergence RSI. Partial 2R, runner sampai target.'],
-  [16,'EURUSD','LONG',1.08610,0.95,0.10,'Pullback ke EMA21 H1 dalam uptrend; eksekusi bersih.'],
-  [14,'BTCUSDT','LONG',97420,-0.70,0.02,'Long breakout gagal, close manual saat invalidasi.'],
-  [13,'XAUUSD','SHORT',2712.30,1.45,0.05,'Double top H4 terkonfirmasi; target tercapai di sesi Asia.'],
-  [10,'GBPUSD','LONG',1.26840,2.10,0.08,'Reversal candle di demand mingguan; RR 1:2,2 tercapai.'],
-  [8,'EURUSD','SHORT',1.09380,-0.60,0.10,'Scalp news gagal, slippage kecil; terima hasil dan lanjut.'],
-  [6,'BTCUSDT','LONG',101250,1.75,0.02,'Higher low di H4; ikuti aliran likuiditas ke resistance berikutnya.'],
-  [4,'XAUUSD','LONG',2701.60,1.05,0.05,'Trend continuation sederhana, exit di target 1R.'],
-  [1,'XAUUSD','SHORT',2735.80,-0.45,0.05,'Fade all-time-high tanpa konfirmasi kuat — pelajaran: jangan menebak pucuk.'],
-];
-const rnd=(v,d)=>+v.toFixed(d);
-function seedDemo(){
-  const t0=Date.now(),dec={EURUSD:5,GBPUSD:5,XAUUSD:2,BTCUSDT:0};
-  trades=DEMO.map((d,i)=>{const[off,asset,pos,entry,rt,lot,notes]=d;const dd=dec[asset]??2;
-    const exit=pos==='LONG'?rnd(entry*(1+rt/100),dd):rnd(entry*(1-rt/100),dd);
-    return{id:uid(),date:addDays(todayISO(),-off),asset,position:pos,entry,exit,lot,notes,demo:true,createdAt:t0-i}});
-  saveTrades();state.editingId=null;state.expanded=null;resetForm();updateFormUI();renderAll();
-  toast(`${trades.length} trade DEMO dimuat — selalu berlabel DEMO`);
-}
-$('#btnDelDemo').onclick=$('#btnBannerDelDemo').onclick=async()=>{
-  const ok=await confirmBox({title:'Hapus Data DEMO?',msg:'Seluruh trade berlabel DEMO akan dihapus. Trade asli milikmu tetap tersimpan.',ok:'Ya, Hapus'});
-  if(!ok)return;trades=trades.filter(t=>!t.demo);saveTrades();renderAll();toast('Data DEMO dihapus');
-};
+/* ================= Kelola data ================= */
 $('#btnClearAll').onclick=async()=>{
   if(!trades.length){toast('Belum ada data untuk dihapus','err');return}
   const ok=await confirmBox({title:'Hapus Semua Data?',msg:`Seluruh ${trades.length} trade akan dihapus permanen dari browser ini. Ekspor CSV terlebih dahulu jika ingin backup.`,ok:'Ya, Hapus Semua'});
@@ -656,10 +624,6 @@ function setPageMeta(){
 }
 function renderSidebar(){
   $('#navCount').textContent=trades.length;
-  const hasDemo=trades.some(t=>t.demo);
-  $('#btnSeed').hidden=trades.length>0;
-  $('#btnDelDemo').hidden=!hasDemo;
-  $('#demoBanner').hidden=!hasDemo;
 }
 function renderAll(){
   renderSidebar();setPageMeta();renderTable();
@@ -712,7 +676,6 @@ document.addEventListener('click',e=>{
     }
     return;
   }
-  const sd=e.target.closest('.seed-btn');if(sd){seedDemo();return}
   if(!e.target.closest('.period-wrap'))$('#customPop').hidden=true;
 });
 $('#btnQuickAdd').onclick=()=>{go('journal');setTimeout(()=>$('#fDate').focus(),120)};
