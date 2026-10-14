@@ -720,6 +720,7 @@ function calcPips(asset,pos,entry,exit){
 let trades=loadTrades();
 const state={page:'overview',period:'all',cFrom:'',cTo:'',cumMethod:'comp',editingId:null,expanded:null,calCursor:null,selDay:null,
   j:{q:'',pos:'ALL',from:'',to:''}};
+let _freshRender=true;
 loadSettings();
 let formPos='LONG';
 
@@ -799,7 +800,7 @@ function tween(elm,to,fmt){const from=elm._v??0;elm._v=to;
     elm.textContent=fmt(from+(to-from)*e);if(p<1)requestAnimationFrame(f)})(t0)}
 
 /* ================= OVERVIEW ================= */
-const statCard=(i,label,val,sub)=>`<div class="card stat reveal" style="--d:${i*35}ms"><div class="stat-label">${label}</div><div class="stat-value">${val}</div><div class="stat-sub">${sub}</div></div>`;
+const statCard=(i,label,val,sub)=>`<div class="card stat${_freshRender?' reveal':''}" style="--d:${i*35}ms"><div class="stat-label">${label}</div><div class="stat-value">${val}</div><div class="stat-sub">${sub}</div></div>`;
 function sparkSVG(series){if(!series||series.length<2)return'';const w=110,h=26;
   const lo=Math.min(...series),hi=Math.max(...series),sp=(hi-lo)||1;
   const pts=series.map((v,i)=>`${(i/(series.length-1)*w).toFixed(1)},${(h-3-(v-lo)/sp*(h-6)).toFixed(1)}`).join(' ');
@@ -850,8 +851,7 @@ function renderDailyChart(){
     const rect=el('rect',{x:cx-bw/2,width:bw,rx:2.5,class:'bar '+(r>0?'pos':r<0?'neg':'be')},svg);
     if(r>=0){rect.setAttribute('y',Y(r));rect.setAttribute('height',Math.max(1.5,y0-Y(r)))}
     else{rect.setAttribute('y',y0);rect.setAttribute('height',Math.max(1.5,Y(r)-y0))}
-    rect.style.transformOrigin=`${cx}px ${y0}px`;
-    rect.style.animation=`barGrow .5s ${i*16}ms cubic-bezier(.2,.7,.3,1) both`;
+    if(_freshRender){rect.style.transformOrigin=`${cx}px ${y0}px`;rect.style.animation=`barGrow .5s ${i*16}ms cubic-bezier(.2,.7,.3,1) both`}
     rect.addEventListener('mouseenter',e=>{rect.classList.add('hot');
       showTip(`<div class="tip-t">${fmtDate(t.date)}</div>${tipRow('Aset',esc(t.asset)||'—')}${tipRow('Posisi',t.position,t.position==='LONG'?'c-l':'c-s')}${tipRow('Return',fmtPct(r),pcls(r))}`,e)});
     rect.addEventListener('mousemove',moveTip);
@@ -884,7 +884,7 @@ function renderCumChart(){
   let d=`M${X(0)},${Y(vals[0])}`;for(let i=1;i<n;i++)d+=`L${X(i)},${Y(vals[i])}`;
   el('path',{d:`${d}L${X(n-1)},${y0}L${X(0)},${y0}Z`,fill:'url(#gCum)'},svg);
   const line=el('path',{d,fill:'none',stroke:'var(--gold)','stroke-width':2,'stroke-linejoin':'round','stroke-linecap':'round'},svg);
-  if(!REDUCED){const len=line.getTotalLength();line.style.strokeDasharray=len;line.style.strokeDashoffset=len;
+  if(_freshRender&&!REDUCED){const len=line.getTotalLength();line.style.strokeDasharray=len;line.style.strokeDashoffset=len;
     line.getBoundingClientRect();line.style.transition='stroke-dashoffset .8s ease';line.style.strokeDashoffset='0'}
   for(let i=0;i<n;i++)el('circle',{cx:X(i),cy:Y(vals[i]),r:2.6,fill:'#0a0e15',stroke:'var(--gold)','stroke-width':1.6},svg);
   const last=vals[n-1];
@@ -955,6 +955,7 @@ function renderOverview(){
   if(!has)return;
   const arr=pt(),m=metrics(arr);
   renderStatCards(m,arr);renderDailyChart();renderCumChart();renderRecent();renderCalendar();renderCalDetail();
+  _freshRender=false;
 }
 
 /* ================= JOURNAL ================= */
@@ -1155,7 +1156,7 @@ function renderHist(){const box=$('#chHist');box.innerHTML='';
     const rect=el('rect',{x:cx-bwpx/2,y:ptp+ih-bh,width:bwpx,height:bh,rx:3,
       class:'bar '+(mid>0?'pos':mid<0?'neg':'be')},svg);
     rect.style.transformOrigin=`${cx}px ${ptp+ih}px`;
-    rect.style.animation=`barGrow .5s ${i*30}ms cubic-bezier(.2,.7,.3,1) both`;
+    if(_freshRender)rect.style.animation=`barGrow .5s ${i*30}ms cubic-bezier(.2,.7,.3,1) both`;
     rect.addEventListener('mouseenter',e=>{rect.classList.add('hot');
       showTip(`<div class="tip-t">Rentang ${fmtPct(b.lo)} s/d ${fmtPct(b.hi)}</div>${tipRow('Jumlah trade',b.n+' trade')}`,e)});
     rect.addEventListener('mousemove',moveTip);
@@ -1250,6 +1251,7 @@ function renderAnalytics(){
   if(!has)return;
   const arr=pt(),m=metrics(arr);
   renderVS(arr);renderHist();renderDDChart();renderConsist(arr);renderMonthly(arr);renderInsights(arr,m);
+  _freshRender=false;
 }
 
 /* ================= Kelola data ================= */
@@ -1291,7 +1293,7 @@ function go(page){
   $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
   $$('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));
   window.scrollTo({top:0,behavior:REDUCED?'auto':'smooth'});
-  renderAll();
+  _freshRender=true;renderAll();
 }
 function syncPeriodSeg(){$$('#periodSeg [data-p]').forEach(b=>b.classList.toggle('active',b.dataset.p===state.period))}
 function syncCumSeg(){$$('#cumSeg [data-m]').forEach(b=>b.classList.toggle('active',b.dataset.m===state.cumMethod))}
