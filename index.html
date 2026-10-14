@@ -1201,7 +1201,12 @@ function renderConsist(arr){
   const chips=[
     [uniq.length,'Hari dengan trade'],[Math.max(0,span-uniq.length),'Hari tanpa trade (rentang)'],
     [st.maxW,'Win streak maks.'],[st.maxL,'Loss streak maks.'],[be,'Trade break-even']];
-  box.innerHTML=chips.map(([v,l],i)=>`<div class="chip-stat reveal" style="--d:${i*40}ms"><div class="cs-v">${fmtInt(v)}</div><div class="cs-l">${l}</div></div>`).join('');
+  const existing=box.querySelectorAll('.chip-stat');
+  if(existing.length===chips.length){
+    chips.forEach(([v,l],i)=>{existing[i].querySelector('.cs-v').textContent=fmtInt(v);existing[i].querySelector('.cs-l').textContent=l});
+  }else{
+    box.innerHTML=chips.map(([v,l],i)=>`<div class="chip-stat" style="--d:${i*40}ms"><div class="cs-v">${fmtInt(v)}</div><div class="cs-l">${l}</div></div>`).join('');
+  }
 }
 function renderMonthly(arr){const box=$('#monthlyTbl');
   if(!arr.length){box.innerHTML='<p class="hint" style="padding:10px">Belum ada data.</p>';return}
