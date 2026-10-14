@@ -302,7 +302,8 @@ tr.trow.open{background:rgba(232,184,75,.04)}
   .nav-item svg{width:20px;height:20px}
   .nav-item.active::before{display:none}
   .chip{display:none}
-  main{padding:14px 12px 90px;overflow-x:hidden;max-width:100vw}
+  main{padding:14px 12px 90px}
+  body{overflow-x:hidden}
   .clock{display:none}
   .topbar{margin-bottom:14px;gap:10px}
   .topbar h1{font-size:21px}
@@ -317,7 +318,8 @@ tr.trow.open{background:rgba(232,184,75,.04)}
 
 /* HP portrait (<=640px) */
 @media(max-width:640px){
-  main{padding:12px 10px 88px;overflow-x:hidden;max-width:100vw}
+  main{padding:12px 10px 88px}
+  body{overflow-x:hidden}
   .topbar{flex-direction:column;align-items:flex-start;gap:8px;margin-bottom:12px}
   .topbar h1{font-size:19px}
   .top-right{width:100%;justify-content:space-between}
@@ -343,8 +345,8 @@ tr.trow.open{background:rgba(232,184,75,.04)}
   .chip-row{gap:8px}
   .chip-stat{min-width:100px;padding:10px 12px}
   .cs-v{font-size:16px}
-  table{min-width:0}
-  .tscroll{overflow-x:hidden}
+  table{min-width:600px}
+  .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
   thead th{font-size:9.5px;padding:9px 8px}
   tbody td{padding:9px 8px;font-size:12px}
   .notes-cell{max-width:140px}
@@ -364,12 +366,13 @@ tr.trow.open{background:rgba(232,184,75,.04)}
 @media(max-width:400px){
   .stat-grid{grid-template-columns:1fr 1fr;gap:8px}
   .stat-value{font-size:17px}
-  main{padding:10px 8px 82px;overflow-x:hidden;max-width:100vw}
+  main{padding:10px 8px 82px}
+  body{overflow-x:hidden}
   .topbar h1{font-size:17px}
   .nav-item{font-size:9px;padding:6px 4px;min-width:44px}
   .nav-item svg{width:18px;height:18px}
   .seg button{font-size:10px;padding:5px 3px}
-  table{min-width:0;font-size:11px}
+  table{min-width:500px;font-size:11px}
   thead th{font-size:9px;padding:7px 5px}
   tbody td{padding:7px 5px;font-size:11px}
   .notes-cell{max-width:100px}
