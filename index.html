@@ -817,7 +817,7 @@ function renderStatCards(m,arr){
     statCard(0,'Total Trades',`<span id="vTotal"></span>`,`${m.wins}W · ${m.losses}L${m.be?` · ${m.be} BE`:''} · ${days} hari aktif`)+
     statCard(1,'Win Rate',`<span id="vWR"></span>`,`<div class="wl-bar" style="width:100%"><i class="w" style="width:${wrW}%"></i><i class="l" style="width:${wrL}%"></i></div>`)+
     statCard(2,'Avg Return / Trade',`<span id="vAvg"></span>`,'Rata-rata return — hanya trade tercatat')+
-    statCard(3,'Cumulative Return',`<span id="vCum"></span>`,`${sparkSVG(series)}<span>${state.cumMethod==='comp'?'Compounded':'Simple'}</span>`)+
+    statCard(3,'Cumulative Return',`<span id="vCum"></span>`,`<div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px">${sparkSVG(series)}<span>${state.cumMethod==='comp'?'Compounded':'Simple'}</span></div>`)+
     statCard(4,'Best Trade',`<span id="vBest"></span>`,best?`${esc(best.asset)||'—'} · ${fmtDate(best.date)} · ${best.position}`:'—')+
     statCard(5,'Max Drawdown',`<span id="vDD"></span>`,'Compounded · puncak → lembah');
   const set=(id,v,fmt,cls)=>{const n=$('#'+id);if(v==null){n.textContent='—';n._v=0;return}
