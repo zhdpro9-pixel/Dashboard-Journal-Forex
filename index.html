@@ -132,8 +132,9 @@ textarea{resize:vertical;min-height:74px}
 .tip-row b{color:var(--text);font-family:var(--font-m);font-weight:500}
 
 /* ===== Table ===== */
-.tscroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;min-width:820px}
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse}
+@media(min-width:1121px){table{min-width:820px}}
 thead th{font:600 10.5px var(--font-b);text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding:11px 13px;text-align:left;border-bottom:1px solid var(--line2);white-space:nowrap}
 tbody td{padding:11px 13px;border-bottom:1px solid var(--line);font-size:13.3px;vertical-align:middle}
 td.r,th.r{text-align:right}
@@ -292,11 +293,13 @@ tr.trow.open{background:rgba(232,184,75,.04)}
 @media(max-width:1120px){
   .g2,.gcal{grid-template-columns:1fr}
   .gj{grid-template-columns:1fr}
+  .grid > *,.g2 > *,.gcal > *,.gj > *{min-width:0}
 }
 
 /* Tablet / HP landscape (≤920px) — sidebar jadi bottom nav */
 @media(max-width:920px){
-  #app{grid-template-columns:1fr}
+  #app{grid-template-columns:1fr;overflow-x:hidden}
+  main{min-width:0}
   .sidebar{
     position:fixed;bottom:0;left:0;right:0;top:auto;height:auto;
     flex-direction:row;align-items:center;
@@ -314,7 +317,8 @@ tr.trow.open{background:rgba(232,184,75,.04)}
   .nav-item.active::before{display:none}
   .chip{display:none}
   main{padding:14px 12px 90px}
-  body{overflow-x:hidden}
+  .card,.card *{max-width:100%}
+  .tscroll{max-width:100%}
   .clock{display:none}
   .topbar{margin-bottom:14px;gap:10px}
   .topbar h1{font-size:21px}
@@ -329,8 +333,7 @@ tr.trow.open{background:rgba(232,184,75,.04)}
 
 /* HP portrait (≤640px) */
 @media(max-width:640px){
-  main{padding:12px 10px 88px}
-  body{overflow-x:hidden}
+  main{padding:12px 10px 88px;min-width:0}
   .topbar{flex-direction:column;align-items:flex-start;gap:8px;margin-bottom:12px}
   .topbar h1{font-size:19px}
   .top-right{width:100%;justify-content:space-between}
@@ -356,8 +359,6 @@ tr.trow.open{background:rgba(232,184,75,.04)}
   .chip-row{gap:8px}
   .chip-stat{min-width:100px;padding:10px 12px}
   .cs-v{font-size:16px}
-  table{min-width:600px}
-  .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
   thead th{font-size:9.5px;padding:9px 8px}
   tbody td{padding:9px 8px;font-size:12px}
   .notes-cell{max-width:140px}
@@ -377,13 +378,12 @@ tr.trow.open{background:rgba(232,184,75,.04)}
 @media(max-width:400px){
   .stat-grid{grid-template-columns:1fr 1fr;gap:8px}
   .stat-value{font-size:17px}
-  main{padding:10px 8px 82px}
-  body{overflow-x:hidden}
+  main{padding:10px 8px 82px;min-width:0}
   .topbar h1{font-size:17px}
   .nav-item{font-size:9px;padding:6px 4px;min-width:44px}
   .nav-item svg{width:18px;height:18px}
   .seg button{font-size:10px;padding:5px 3px}
-  table{min-width:500px;font-size:11px}
+  table{width:100%;font-size:11px}
   thead th{font-size:9px;padding:7px 5px}
   tbody td{padding:7px 5px;font-size:11px}
   .notes-cell{max-width:100px}
