@@ -660,19 +660,12 @@ document.addEventListener('click',e=>{
     state.cumMethod=cb.dataset.m;
     saveSettings();
     syncCumSeg();
-    renderCumChart();
-    const arr=pt();
-    if(arr.length){
-      const m=metrics(arr);
-      const cumVal=state.cumMethod==='comp'?m.comp:m.simple;
-      const series=state.cumMethod==='comp'?m.curve:[0,...m.simpleCurve];
-      const nCum=$('#vCum');
-      if(nCum){
-        nCum.className=pcls(cumVal);
-        tween(nCum,cumVal,v=>fmtPct(v));
-        const sub=nCum.closest('.card')?.querySelector('.stat-sub');
-        if(sub)sub.innerHTML=`${sparkSVG(series)}<span>${state.cumMethod==='comp'?'Compounded':'Simple'}</span>`;
-      }
+    if(state.page==='overview'){
+      const arr=pt(),m=metrics(arr);
+      renderStatCards(m,arr);
+      renderCumChart();
+    }else{
+      renderCumChart();
     }
     return;
   }
