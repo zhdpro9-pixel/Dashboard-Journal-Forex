@@ -1212,7 +1212,7 @@ function renderMonthly(arr){const box=$('#monthlyTbl');
     return `<tr><td class="mono">${lab}</td><td class="mono c">${m.total}</td>
       <td class="mono c">${fmtPct(m.winRate,1)}</td><td class="mono c ${pcls(m.avg)}">${fmtPct(m.avg)}</td>
       <td class="mono c ${pcls(m.comp)}">${fmtPct(m.comp)}</td><td class="mono c ${pcls(m.simple)}">${fmtPct(m.simple)}</td></tr>`});
-  box.innerHTML=`<table class="mini"><thead><tr><th>Bulan</th><th class="c">Trades</th><th class="c">Win Rate</th><th class="c">Avg</th><th class="c">Kumulatif (comp)</th><th class="c">Σ Simple</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  box.innerHTML=`<table class="mini"><thead><tr><th>Bulan</th><th class="c">Trades</th><th class="c">Win Rate</th><th class="c">Avg</th><th class="c">Kumulatif</th><th class="c">Simple</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
 }
 function renderInsights(arr,m){const ul=$('#insights');
   if(!arr.length){ul.innerHTML='<li class="dim">Belum ada data pada periode ini.</li>';return}
