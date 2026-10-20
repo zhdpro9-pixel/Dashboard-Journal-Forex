@@ -1058,8 +1058,6 @@ $('#tradeForm').addEventListener('submit',e=>{
   if(!isFinite(lot)||lot<=0)errs.push('Lot harus berupa angka lebih dari 0.');
   if(!isFinite(entry)||entry<=0)errs.push('Harga entry harus berupa angka lebih dari 0.');
   if(!isFinite(exit)||exit<=0)errs.push('Harga exit harus berupa angka lebih dari 0.');
-  const dup=trades.find(t=>t.date===date&&t.id!==state.editingId);
-  if(dup)errs.push(`Tanggal ${fmtDate(date)} sudah memiliki trade (${dup.asset||'tanpa aset'}, ${fmtPct(tradeRet(dup))}). Aturan: maksimal 1 entry per hari — edit atau hapus trade lama terlebih dahulu.`);
   const errBox=$('#formErr');
   if(errs.length){errBox.hidden=false;errBox.innerHTML='<ul>'+errs.map(x=>`<li>${x}</li>`).join('')+'</ul>';
     $('#formCard').classList.add('shake');setTimeout(()=>$('#formCard').classList.remove('shake'),450);
@@ -1242,7 +1240,6 @@ function renderInsights(arr,m){const ul=$('#insights');
   }
   const best=arr.reduce((a,b)=>tradeRet(b)>tradeRet(a)?b:a),worst=arr.reduce((a,b)=>tradeRet(b)<tradeRet(a)?b:a);
   out.push(`Trade terbaik ${fmtPct(tradeRet(best))} (${esc(best.asset)||'—'}, ${fmtDate(best.date)}) · terburuk ${fmtPct(tradeRet(worst))} (${esc(worst.asset)||'—'}, ${fmtDate(worst.date)}).`);
-  out.push('Validasi aktif: maksimal 1 trade per tanggal — duplikasi entry otomatis ditolak sistem.');
   ul.innerHTML=out.map(x=>`<li>${x}</li>`).join('');
 }
 function renderAnalytics(){
