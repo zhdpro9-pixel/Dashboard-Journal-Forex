@@ -218,6 +218,11 @@ tr.trow.open{background:rgba(232,184,75,.04)}
 .cd-empty{color:var(--mut);font-size:13px}
 .cd-empty p{margin-top:4px;font-size:12.5px;color:var(--dim)}
 #calSum{font-size:11.5px;color:var(--dim);margin-top:10px}
+.cal-count{position:absolute;top:3px;right:3px;font:700 9px var(--font-b);background:var(--gold);color:#1a1a2e;border-radius:50%;min-width:15px;height:15px;display:flex;align-items:center;justify-content:center;padding:0 3px;line-height:1}
+.cd-trade-item{background:rgba(148,163,184,.04);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.cd-trade-item:last-child{margin-bottom:0}
+.cd-trade-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.cd-trade-num{font:600 10px var(--font-b);color:var(--dim);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
 
 /* ===== Recent list ===== */
 .rrow{display:flex;align-items:center;gap:13px;padding:9px 10px;border-radius:9px;cursor:pointer;transition:background .13s}
@@ -508,7 +513,7 @@ tr.trow.open{background:rgba(232,184,75,.04)}
                 <span><i style="background:rgba(148,163,184,.14)"></i>Tanpa trade</span>
               </div>
               <div class="cal" id="calGrid"></div>
-              <p class="hint cal-note">Aturan: maksimal 1 entry per hari. Hari tanpa trade adalah istirahat yang disengaja — bukan pelanggaran.</p>
+              <p class="hint cal-note">Hari tanpa trade adalah istirahat yang disengaja — bukan pelanggaran.</p>
               <div class="cal-detail" id="calDetail"></div>
             </div>
           </section>
@@ -919,34 +924,53 @@ function renderCalendar(){
   const cur=state.calCursor||(state.calCursor={y:now.getFullYear(),m:now.getMonth()});
   $('#calTitle').textContent=`${MONTHS_FULL[cur.m]} ${cur.y}`;
   const first=new Date(cur.y,cur.m,1),startIdx=(first.getDay()+6)%7,dim=new Date(cur.y,cur.m+1,0).getDate();
-  const map=new Map(trades.map(t=>[t.date,t]));
+  const grouped=new Map();
+  trades.forEach(t=>{if(!grouped.has(t.date))grouped.set(t.date,[]);grouped.get(t.date).push(t)});
   let cells=['Sen','Sel','Rab','Kam','Jum','Sab','Min'].map(d=>`<div class="cal-hd">${d}</div>`).join('');
   for(let i=0;i<startIdx;i++)cells+='<div class="cal-day empty"></div>';
-  let mw=0,ml=0,mt=0;
+  let totalTrades=0,totalWin=0,totalLoss=0;
   for(let d=1;d<=dim;d++){
-    const ds=`${cur.y}-${pad(cur.m+1)}-${pad(d)}`,t=map.get(ds);
+    const ds=`${cur.y}-${pad(cur.m+1)}-${pad(d)}`,dayTrades=grouped.get(ds)||[];
     let cls='',ttl=fmtDate(ds);
-    if(t){const r=tradeRet(t);cls=pcls(r)==='pos'?'win':pcls(r)==='neg'?'loss':'bee';
-      ttl+=` · ${t.asset||'—'} ${fmtPct(r)}`;mt++;if(r>0)mw++;else if(r<0)ml++}
+    if(dayTrades.length){
+      const netRet=dayTrades.reduce((s,t)=>s+tradeRet(t),0);
+      cls=pcls(netRet)==='pos'?'win':pcls(netRet)==='neg'?'loss':'bee';
+      const labels=dayTrades.map(t=>`${t.asset||'—'} ${fmtPct(tradeRet(t))}`).join(' | ');
+      ttl+=` · ${dayTrades.length} trade${dayTrades.length>1?'s':''}: ${labels}`;
+      totalTrades+=dayTrades.length;
+      dayTrades.forEach(t=>{const r=tradeRet(t);if(r>0)totalWin++;else if(r<0)totalLoss++});
+    }
     const today=ds===todayISO()?' today':'',sel=ds===state.selDay?' sel':'';
-    cells+=`<div class="cal-day ${cls}${today}${sel}" data-d="${ds}" title="${esc(ttl)}">${d}</div>`;
+    const countBadge=dayTrades.length>1?`<span class="cal-count">${dayTrades.length}</span>`:'';
+    cells+=`<div class="cal-day ${cls}${today}${sel}" data-d="${ds}" title="${esc(ttl)}">${d}${countBadge}</div>`;
   }
   $('#calGrid').innerHTML=cells;
-  $('#calSum').textContent=mt?`${mt} hari trading · ${mw} profit · ${ml} loss`:'Belum ada trade bulan ini';
+  $('#calSum').textContent=totalTrades?`${totalTrades} trade${totalTrades>1?'s':''} · ${totalWin} profit · ${totalLoss} loss`:'Belum ada trade bulan ini';
 }
 function renderCalDetail(){
   const box=$('#calDetail');
   if(!state.selDay){box.innerHTML='<div class="cd-empty">Pilih tanggal pada kalender untuk melihat detail trade.</div>';return}
-  const t=trades.find(x=>x.date===state.selDay);
-  if(!t){box.innerHTML=`<div class="cd-empty"><b>${fmtDateLong(state.selDay)}</b><p>Tidak ada trade. Hari tanpa trade adalah istirahat yang sah — bukan pelanggaran aturan.</p></div>`;return}
-  const r=tradeRet(t),c=pcls(r);
-  box.innerHTML=`<div class="cd-head">
-      <div><div class="cd-date">${fmtDateLong(t.date)}</div>
-      <div class="cd-asset">${esc(t.asset)||'Tanpa aset'} · <span class="badge ${t.position.toLowerCase()}">${t.position==='LONG'?'▲':'▼'} ${t.position}</span></div></div>
-      <div class="cd-ret ${c}">${fmtPct(r)}</div></div>
-    <div class="cd-grid mono"><span>Entry <b>${fmtPrice(t.entry)}</b></span><span>Exit <b>${fmtPrice(t.exit)}</b></span>${t.lot!=null?`<span>Lot <b>${Number(t.lot).toFixed(2)}</b></span>`:''}</div>
-    ${t.notes?`<p class="cd-notes">${esc(t.notes)}</p>`:'<p class="cd-notes dim">Tidak ada catatan.</p>'}
-    <div class="cd-actions"><button class="btn sm" data-act="edit" data-id="${t.id}">✎ Edit</button><button class="btn sm danger" data-act="del" data-id="${t.id}">Hapus</button></div>`;
+  const dayTrades=trades.filter(x=>x.date===state.selDay).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+  if(!dayTrades.length){box.innerHTML=`<div class="cd-empty"><b>${fmtDateLong(state.selDay)}</b><p>Tidak ada trade. Hari tanpa trade adalah istirahat yang sah — bukan pelanggaran aturan.</p></div>`;return}
+  const netRet=dayTrades.reduce((s,t)=>s+tradeRet(t),0);
+  const netCls=pcls(netRet);
+  let html=`<div class="cd-head"><div><div class="cd-date">${fmtDateLong(dayTrades[0].date)}</div>
+    <div class="cd-asset">${dayTrades.length} trade${dayTrades.length>1?'s':''} · <span class="badge ${netCls==='pos'?'long':netCls==='neg'?'short':''}">Net ${fmtPct(netRet)}</span></div></div>
+    <div class="cd-ret ${netCls}">${fmtPct(netRet)}</div></div>`;
+  dayTrades.forEach((t,i)=>{
+    const r=tradeRet(t),c=pcls(r);
+    html+=`<div class="cd-trade-item">
+      <div class="cd-trade-num">Trade #${i+1}</div>
+      <div class="cd-trade-head">
+        <div><div class="cd-asset">${esc(t.asset)||'Tanpa aset'} · <span class="badge ${t.position.toLowerCase()}">${t.position==='LONG'?'▲':'▼'} ${t.position}</span></div></div>
+        <div class="cd-ret ${c}" style="font-size:18px">${fmtPct(r)}</div>
+      </div>
+      <div class="cd-grid mono"><span>Entry <b>${fmtPrice(t.entry)}</b></span><span>Exit <b>${fmtPrice(t.exit)}</b></span>${t.lot!=null?`<span>Lot <b>${Number(t.lot).toFixed(2)}</b></span>`:''}</div>
+      ${t.notes?`<p class="cd-notes">${esc(t.notes)}</p>`:'<p class="cd-notes dim">Tidak ada catatan.</p>'}
+      <div class="cd-actions"><button class="btn sm" data-act="edit" data-id="${t.id}">✎ Edit</button><button class="btn sm danger" data-act="del" data-id="${t.id}">Hapus</button></div>
+    </div>`;
+  });
+  box.innerHTML=html;
 }
 
 function renderOverview(){
