@@ -101,13 +101,13 @@ function loadTrades() {
   try {
     const key = getUserTradesKey();
     let raw = localStorage.getItem(key);
-    if (raw === null && key !== LS_KEY && !localStorage.getItem(LS_INIT_MIGRATED)) {
+    if ((!raw || raw === '[]') && key !== LS_KEY && !localStorage.getItem('tjd.migrated.' + key)) {
       const legacy = localStorage.getItem(LS_KEY);
       if (legacy && legacy !== '[]') {
         localStorage.setItem(key, legacy);
         raw = legacy;
       }
-      localStorage.setItem(LS_INIT_MIGRATED, '1');
+      localStorage.setItem('tjd.migrated.' + key, '1');
     }
     const r = JSON.parse(raw || '[]');
     return Array.isArray(r)
@@ -357,6 +357,24 @@ function openAddPairModal(fallbackVal = 'XAUUSD') {
 }
 
 /* ================= Full-Screen Auth Gate, PIN 4 Angka & Cloud Sync ================= */
+const SS_PIN_UNLOCKED = 'tjd.pin_unlocked.v1';
+
+function markSessionUnlocked(email) {
+  try {
+    if (email) sessionStorage.setItem(SS_PIN_UNLOCKED, email.toLowerCase());
+    else sessionStorage.removeItem(SS_PIN_UNLOCKED);
+  } catch (_) {}
+}
+
+function isSessionUnlocked(email) {
+  if (!email) return false;
+  try {
+    return sessionStorage.getItem(SS_PIN_UNLOCKED) === email.toLowerCase();
+  } catch (_) {
+    return false;
+  }
+}
+
 let gateState = {
   mode: 'auth', // 'auth' | 'set-pin' | 'enter-pin'
   tab: 'login', // 'login' | 'register'
@@ -476,7 +494,7 @@ async function syncFromCloud(showFeedback = false) {
       }
     } catch (_) {}
 
-    // 2. Ambil trades milik user ini
+    // 2. Ambil trades milik user ini dari Supabase Cloud
     const { data, error } = await sbClient
       .from('trades')
       .select('*')
@@ -484,9 +502,25 @@ async function syncFromCloud(showFeedback = false) {
 
     if (error) throw error;
 
-    if (data && data.length > 0) {
-      trades = data.map(t => ({
+    const cloudList = (data || []).map(t => ({
+      id: String(t.id),
+      date: t.date,
+      asset: t.asset,
+      position: t.position,
+      entry: Number(t.entry),
+      exit: Number(t.exit),
+      lot: t.lot != null ? Number(t.lot) : 0.01,
+      notes: t.notes || '',
+      createdAt: Number(t.created_at || t.createdAt || Date.now())
+    }));
+
+    const cloudMap = new Map(cloudList.map(t => [String(t.id), t]));
+    const localMissing = trades.filter(t => t && t.id && !cloudMap.has(String(t.id)));
+
+    if (localMissing.length > 0) {
+      const rowsToUpload = localMissing.map(t => ({
         id: String(t.id),
+        user_id: currentUser.id,
         date: t.date,
         asset: t.asset,
         position: t.position,
@@ -494,35 +528,32 @@ async function syncFromCloud(showFeedback = false) {
         exit: Number(t.exit),
         lot: t.lot != null ? Number(t.lot) : 0.01,
         notes: t.notes || '',
-        createdAt: t.created_at ? Number(t.created_at) : Date.now()
+        created_at: Number(t.createdAt || Date.now())
       }));
-      saveTrades();
-      renderAll();
-      if (showFeedback) toast('Sinkronisasi cloud berhasil');
-    } else if (trades.length > 0) {
-      // Cloud masih kosong tapi ada trade lokal: migrasikan otomatis ke cloud user
-      const rows = trades.map(t => ({
-        id: String(t.id),
-        user_id: currentUser.id,
-        date: t.date,
-        asset: t.asset,
-        position: t.position,
-        entry: t.entry,
-        exit: t.exit,
-        lot: t.lot != null ? Number(t.lot) : 0.01,
-        notes: t.notes || '',
-        created_at: t.createdAt || Date.now()
-      }));
-      const { error: insErr } = await sbClient.from('trades').insert(rows);
-      if (!insErr && showFeedback) {
-        toast(`${trades.length} trade lokal berhasil disinkronkan ke cloud`);
+      const { error: upErr } = await sbClient.from('trades').upsert(rowsToUpload, { onConflict: 'id' });
+      if (upErr) {
+        console.warn('Cloud upsert error:', upErr);
+        if (showFeedback) {
+          toast('Gagal unggah ke Cloud: pastikan SQL perbaikan tabel sudah dijalankan di Supabase', 'err');
+        }
+      } else {
+        localMissing.forEach(t => cloudMap.set(String(t.id), t));
+        if (showFeedback) {
+          toast(`${localMissing.length} trade lokal berhasil disinkronkan ke Cloud`);
+        }
       }
     } else if (showFeedback) {
-      toast('Akun cloud sudah tersinkronisasi');
+      toast('Data Laptop & HP sudah tersinkronisasi');
+    }
+
+    if (cloudMap.size > 0) {
+      trades = Array.from(cloudMap.values());
+      saveTrades();
+      renderAll();
     }
   } catch (err) {
     console.warn('Sync error:', err);
-    if (showFeedback) toast('Sinkronisasi lokal aktif', 'ok');
+    if (showFeedback) toast('Gagal sinkron Cloud: ' + (err.message || 'Periksa tabel Supabase'), 'err');
   } finally {
     isSyncing = false;
   }
@@ -552,6 +583,9 @@ function subscribeRealtime() {
 }
 
 function unlockGate() {
+  if (currentUser && currentUser.email) {
+    markSessionUnlocked(currentUser.email);
+  }
   const gate = $('#authGate');
   if (!gate) return;
   gate.classList.add('unlocking');
@@ -645,6 +679,7 @@ function renderAuthGate() {
     };
     $('#btnSwitchAcc').onclick = async () => {
       if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) {} }
+      markSessionUnlocked(null);
       setActiveUserSession(null);
       showGate('auth', { tab: 'login', prefillEmail: '' });
     };
@@ -1001,6 +1036,19 @@ async function initAuth() {
     savedUser = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
   } catch (_) {}
 
+  // Jika hanya refresh halaman dalam sesi yang sama (belum keluar/tutup aplikasi), langsung sembunyikan gate tanpa kedip
+  const gate = $('#authGate');
+  if (savedUser && savedUser.email && getSavedPin(savedUser.email) && isSessionUnlocked(savedUser.email)) {
+    currentUser = savedUser;
+    if (gate) {
+      gate.hidden = true;
+      gate.innerHTML = '';
+    }
+    updateAuthUI();
+    trades = loadTrades();
+    renderAll();
+  }
+
   if (sbClient) {
     try {
       const { data: { session } } = await sbClient.auth.getSession();
@@ -1026,8 +1074,18 @@ async function initAuth() {
     renderAll();
     const pin = getSavedPin(savedUser.email);
     if (pin) {
-      // Sudah pernah login & sudah punya PIN -> langsung minta PIN 4 angka
-      showGate('enter-pin');
+      if (isSessionUnlocked(savedUser.email)) {
+        // Sesi masih aktif (hanya refresh halaman) -> tidak perlu minta PIN lagi
+        if (gate) {
+          gate.hidden = true;
+          gate.innerHTML = '';
+        }
+        syncFromCloud();
+        subscribeRealtime();
+      } else {
+        // Aplikasi baru dibuka kembali setelah ditutup / dihapus dari multitasking -> minta PIN 4 angka
+        showGate('enter-pin');
+      }
     } else {
       // Sudah login tapi belum atur PIN -> minta atur PIN 4 angka
       showGate('set-pin');
@@ -1095,6 +1153,7 @@ function openAuthModal() {
 
   $('#mAuthLockNow').onclick = () => {
     close();
+    markSessionUnlocked(null);
     if (getSavedPin(email)) {
       showGate('enter-pin');
     } else {
@@ -1126,6 +1185,7 @@ function openAuthModal() {
     if (ok) {
       close();
       if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) {} }
+      markSessionUnlocked(null);
       setActiveUserSession(null);
       toast('Berhasil keluar dari akun');
       showGate('auth', { tab: 'login' });
