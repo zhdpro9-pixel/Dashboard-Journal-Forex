@@ -2383,11 +2383,22 @@ function tickClock() {
   $('#clock').textContent = `${DAYS[d.getDay()]}, ${pad(d.getDate())} ${MONTHS[d.getMonth()]} ${d.getFullYear()} · ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 tickClock(); setInterval(tickClock, 1000);
+
+let lastInnerWidth = window.innerWidth;
 window.addEventListener('resize', debounce(() => {
-  if (state.page === 'overview') { renderOverview(); syncRecentHeight(); }
+  // Abaikan event resize jika lebar layar tidak berubah (misal: saat scroll di HP yang menyebabkan address bar muncul/hilang)
+  if (window.innerWidth === lastInnerWidth) return;
+  lastInnerWidth = window.innerWidth;
+
+  if (state.page === 'overview') {
+    // Cukup render ulang grafik SVG yang responsif terhadap lebar layar tanpa mengulang animasi kartu KPI
+    renderDailyChart();
+    renderCumChart();
+    syncRecentHeight();
+  }
   else if (state.page === 'journal') syncJournalHeight();
   else if (state.page === 'analytics') renderAnalytics();
-}, 180));
+}, 200));
 
 /* ---- init ---- */
 $('#fDate').value = todayISO();
