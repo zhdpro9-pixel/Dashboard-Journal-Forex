@@ -358,22 +358,66 @@ function openAddPairModal(fallbackVal = 'XAUUSD') {
 
 /* ================= Full-Screen Auth Gate, PIN 4 Angka & Cloud Sync ================= */
 const SS_PIN_UNLOCKED = 'tjd.pin_unlocked.v1';
+const LS_LAST_UNLOAD = 'tjd.last_unload_ts';
+
+function isPageReload() {
+  try {
+    const navEntries = performance.getEntriesByType && performance.getEntriesByType('navigation');
+    if (navEntries && navEntries.length > 0) {
+      return navEntries[0].type === 'reload';
+    }
+    if (window.performance && window.performance.navigation) {
+      return window.performance.navigation.type === 1;
+    }
+  } catch (_) {}
+  return false;
+}
 
 function markSessionUnlocked(email) {
   try {
-    if (email) sessionStorage.setItem(SS_PIN_UNLOCKED, email.toLowerCase());
-    else sessionStorage.removeItem(SS_PIN_UNLOCKED);
+    if (email) {
+      sessionStorage.setItem(SS_PIN_UNLOCKED, email.toLowerCase());
+      localStorage.setItem('tjd.last_unlocked_user', email.toLowerCase());
+    } else {
+      sessionStorage.removeItem(SS_PIN_UNLOCKED);
+    }
   } catch (_) {}
 }
 
 function isSessionUnlocked(email) {
   if (!email) return false;
+  const em = email.toLowerCase();
+
+  // 1. Cek sessionStorage (standar tab browser aktif)
   try {
-    return sessionStorage.getItem(SS_PIN_UNLOCKED) === email.toLowerCase();
-  } catch (_) {
-    return false;
+    if (sessionStorage.getItem(SS_PIN_UNLOCKED) === em) return true;
+  } catch (_) {}
+
+  // 2. Cek apakah ini adalah refresh halaman (F5 / tarik refresh di HP / tombol reload)
+  if (isPageReload()) {
+    markSessionUnlocked(em);
+    return true;
   }
+
+  // 3. Cek jarak waktu unload halaman (< 3.5 detik = proses refresh)
+  try {
+    const lastUnload = Number(localStorage.getItem(LS_LAST_UNLOAD) || '0');
+    if (lastUnload > 0 && (Date.now() - lastUnload) < 3500) {
+      markSessionUnlocked(em);
+      return true;
+    }
+  } catch (_) {}
+
+  return false;
 }
+
+// Catat waktu unload saat halaman di-refresh atau ditutup
+window.addEventListener('beforeunload', () => {
+  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) {}
+});
+window.addEventListener('pagehide', () => {
+  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) {}
+});
 
 let gateState = {
   mode: 'auth', // 'auth' | 'set-pin' | 'enter-pin'
@@ -453,6 +497,47 @@ async function tryUpgradeToCloud(email, rawPass) {
   return null;
 }
 
+function showUpdateBanner(msg) {
+  const banner = $('#syncUpdateBanner');
+  if (!banner) return;
+  if (msg) {
+    const textEl = $('#syncBannerText');
+    if (textEl) textEl.textContent = msg;
+  }
+  banner.hidden = false;
+}
+
+function hideUpdateBanner() {
+  const banner = $('#syncUpdateBanner');
+  if (banner) banner.hidden = true;
+}
+
+function computeTradesHash(list) {
+  if (!list || !list.length) return 'empty';
+  return list.map(t => `${t.id}:${t.entry}:${t.exit}:${t.lot}:${t.date}`).sort().join('|');
+}
+
+async function checkForRemoteUpdates() {
+  if (!currentUser || !sbClient || currentUser.isLocalOnly || isSyncing) return;
+  try {
+    const { data, error } = await sbClient
+      .from('trades')
+      .select('id, date, asset, entry, exit, lot')
+      .order('date', { ascending: true });
+
+    if (error || !data) return;
+
+    const cloudHash = computeTradesHash(data);
+    const localHash = computeTradesHash(trades);
+
+    if (cloudHash !== localHash) {
+      const act = data.length < trades.length ? 'penghapusan' : (data.length > trades.length ? 'penambahan' : 'perubahan');
+      showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
+      toast(`Terdeteksi pembaruan data (${act}) dari perangkat lain`, 'ok');
+    }
+  } catch (_) {}
+}
+
 async function syncFromCloud(showFeedback = false) {
   if (!currentUser || !sbClient) return;
 
@@ -494,7 +579,7 @@ async function syncFromCloud(showFeedback = false) {
       }
     } catch (_) {}
 
-    // 2. Ambil trades milik user ini dari Supabase Cloud
+    // 2. Ambil trades milik user ini dari Supabase Cloud (Single Source of Truth)
     const { data, error } = await sbClient
       .from('trades')
       .select('*')
@@ -502,7 +587,7 @@ async function syncFromCloud(showFeedback = false) {
 
     if (error) throw error;
 
-    const cloudList = (data || []).map(t => ({
+    const cloudTrades = (data || []).map(t => ({
       id: String(t.id),
       date: t.date,
       asset: t.asset,
@@ -514,11 +599,12 @@ async function syncFromCloud(showFeedback = false) {
       createdAt: Number(t.created_at || t.createdAt || Date.now())
     }));
 
-    const cloudMap = new Map(cloudList.map(t => [String(t.id), t]));
-    const localMissing = trades.filter(t => t && t.id && !cloudMap.has(String(t.id)));
+    const syncInitKey = 'tjd.cloud_init_' + currentUser.id;
+    const hasInitialized = localStorage.getItem(syncInitKey) === '1';
 
-    if (localMissing.length > 0) {
-      const rowsToUpload = localMissing.map(t => ({
+    // Migrasi lokal ke Cloud hanya dilakukan SEKALI saat akun baru pertama kali konek dan cloud masih kosong
+    if (!hasInitialized && cloudTrades.length === 0 && trades.length > 0) {
+      const rowsToUpload = trades.map(t => ({
         id: String(t.id),
         user_id: currentUser.id,
         date: t.date,
@@ -530,27 +616,22 @@ async function syncFromCloud(showFeedback = false) {
         notes: t.notes || '',
         created_at: Number(t.createdAt || Date.now())
       }));
-      const { error: upErr } = await sbClient.from('trades').upsert(rowsToUpload, { onConflict: 'id' });
-      if (upErr) {
-        console.warn('Cloud upsert error:', upErr);
-        if (showFeedback) {
-          toast('Gagal unggah ke Cloud: pastikan SQL perbaikan tabel sudah dijalankan di Supabase', 'err');
-        }
-      } else {
-        localMissing.forEach(t => cloudMap.set(String(t.id), t));
-        if (showFeedback) {
-          toast(`${localMissing.length} trade lokal berhasil disinkronkan ke Cloud`);
-        }
+      const { error: insErr } = await sbClient.from('trades').insert(rowsToUpload);
+      if (!insErr) {
+        localStorage.setItem(syncInitKey, '1');
+        if (showFeedback) toast(`${trades.length} trade lokal disimpan ke Cloud`);
       }
-    } else if (showFeedback) {
-      toast('Data Laptop & HP sudah tersinkronisasi');
-    }
-
-    if (cloudMap.size > 0) {
-      trades = Array.from(cloudMap.values());
+    } else {
+      // SETELAH INISIALISASI: CLOUD ADALAH SUMBER DATA TUNGGAL
+      // Jika di laptop dihapus (cloudTrades kosong), di HP juga otomatis terhapus!
+      localStorage.setItem(syncInitKey, '1');
+      trades = cloudTrades;
       saveTrades();
       renderAll();
+      if (showFeedback) toast('Data tersinkronisasi dengan Cloud');
     }
+
+    hideUpdateBanner();
   } catch (err) {
     console.warn('Sync error:', err);
     if (showFeedback) toast('Gagal sinkron Cloud: ' + (err.message || 'Periksa tabel Supabase'), 'err');
@@ -573,8 +654,11 @@ function subscribeRealtime() {
         schema: 'public',
         table: 'trades',
         filter: `user_id=eq.${currentUser.id}`
-      }, () => {
-        syncFromCloud();
+      }, payload => {
+        const ev = payload.eventType;
+        const act = ev === 'DELETE' ? 'penghapusan' : (ev === 'INSERT' ? 'penambahan' : 'perubahan');
+        showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
+        toast(`Pembaruan terdeteksi: Ada ${act} data trade. Silakan refresh atau klik Muat Ulang.`, 'ok');
       })
       .subscribe();
   } catch (e) {
@@ -2316,4 +2400,29 @@ syncPeriodSeg(); syncCumSeg(); syncPosSeg(); updatePreview(); updateFormUI();
 renderAll();
 
 if ($('#btnAuth')) $('#btnAuth').onclick = openAuthModal;
+if ($('#btnApplyUpdate')) {
+  $('#btnApplyUpdate').onclick = async () => {
+    const b = $('#btnApplyUpdate');
+    b.disabled = true;
+    b.textContent = 'Memperbarui...';
+    await syncFromCloud(true);
+    b.disabled = false;
+    b.textContent = 'Muat Ulang Data ↻';
+    hideUpdateBanner();
+  };
+}
+if ($('#btnCloseUpdateBanner')) {
+  $('#btnCloseUpdateBanner').onclick = hideUpdateBanner;
+}
+
+// Cek pembaruan dari perangkat lain saat membuka kembali aplikasi di HP atau fokus layar
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    checkForRemoteUpdates();
+  }
+});
+window.addEventListener('focus', () => {
+  checkForRemoteUpdates();
+});
+
 initAuth();

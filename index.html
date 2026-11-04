@@ -2991,6 +2991,73 @@ tr.trow.open {
   flex-shrink: 0;
 }
 
+/* ===== Update Notification Banner ===== */
+.sync-banner {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9200;
+  background: linear-gradient(135deg, #192437 0%, #0f1726 100%);
+  border: 1.5px solid var(--gold);
+  border-radius: 14px;
+  padding: 10px 16px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .65), 0 0 20px rgba(232, 184, 75, .25);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(540px, 94vw);
+  animation: bannerSlideDown .28s cubic-bezier(.16, 1, .3, 1);
+}
+@keyframes bannerSlideDown {
+  from { opacity: 0; transform: translate(-50%, -20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.sync-banner[hidden] {
+  display: none !important;
+}
+.sync-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+.sync-banner-icon {
+  font-size: 19px;
+  animation: bellRing 2s infinite ease-in-out;
+  display: inline-block;
+}
+@keyframes bellRing {
+  0%, 100% { transform: rotate(0); }
+  15% { transform: rotate(14deg); }
+  30% { transform: rotate(-14deg); }
+  45% { transform: rotate(10deg); }
+  60% { transform: rotate(-6deg); }
+  75% { transform: rotate(0); }
+}
+.sync-banner-text {
+  font: 500 13px var(--font-b);
+  color: var(--text);
+  flex: 1;
+  min-width: 170px;
+}
+.sync-banner-close {
+  background: none;
+  border: none;
+  color: var(--mut);
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: 6px;
+  transition: all .15s;
+}
+.sync-banner-close:hover {
+  color: var(--text);
+  background: rgba(148, 163, 184, .1);
+}
+
 /* Prefers reduced motion */
 @media(prefers-reduced-motion:reduce) {
   * {
@@ -3565,7 +3632,17 @@ tr.trow.open {
   <div class="tip" id="tooltip"></div>
   <div id="toasts"></div>
   <div id="modalRoot"></div>
-  <div id="authGate" class="auth-gate"></div>
+  <div id="authGate" class="auth-gate" hidden></div>
+
+  <!-- Update Notification Banner -->
+  <div id="syncUpdateBanner" class="sync-banner" hidden>
+    <div class="sync-banner-content">
+      <span class="sync-banner-icon">🔔</span>
+      <span class="sync-banner-text" id="syncBannerText">Ada pembaruan data trading dari perangkat lain.</span>
+      <button type="button" class="btn primary sm" id="btnApplyUpdate">Muat Ulang Data ↻</button>
+      <button type="button" class="sync-banner-close" id="btnCloseUpdateBanner" title="Tutup">✕</button>
+    </div>
+  </div>
 
   <script>
 'use strict';
@@ -3671,13 +3748,13 @@ function loadTrades() {
   try {
     const key = getUserTradesKey();
     let raw = localStorage.getItem(key);
-    if (raw === null && key !== LS_KEY && !localStorage.getItem(LS_INIT_MIGRATED)) {
+    if ((!raw || raw === '[]') && key !== LS_KEY && !localStorage.getItem('tjd.migrated.' + key)) {
       const legacy = localStorage.getItem(LS_KEY);
       if (legacy && legacy !== '[]') {
         localStorage.setItem(key, legacy);
         raw = legacy;
       }
-      localStorage.setItem(LS_INIT_MIGRATED, '1');
+      localStorage.setItem('tjd.migrated.' + key, '1');
     }
     const r = JSON.parse(raw || '[]');
     return Array.isArray(r)
@@ -3927,6 +4004,68 @@ function openAddPairModal(fallbackVal = 'XAUUSD') {
 }
 
 /* ================= Full-Screen Auth Gate, PIN 4 Angka & Cloud Sync ================= */
+const SS_PIN_UNLOCKED = 'tjd.pin_unlocked.v1';
+const LS_LAST_UNLOAD = 'tjd.last_unload_ts';
+
+function isPageReload() {
+  try {
+    const navEntries = performance.getEntriesByType && performance.getEntriesByType('navigation');
+    if (navEntries && navEntries.length > 0) {
+      return navEntries[0].type === 'reload';
+    }
+    if (window.performance && window.performance.navigation) {
+      return window.performance.navigation.type === 1;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function markSessionUnlocked(email) {
+  try {
+    if (email) {
+      sessionStorage.setItem(SS_PIN_UNLOCKED, email.toLowerCase());
+      localStorage.setItem('tjd.last_unlocked_user', email.toLowerCase());
+    } else {
+      sessionStorage.removeItem(SS_PIN_UNLOCKED);
+    }
+  } catch (_) {}
+}
+
+function isSessionUnlocked(email) {
+  if (!email) return false;
+  const em = email.toLowerCase();
+
+  // 1. Cek sessionStorage (standar tab browser aktif)
+  try {
+    if (sessionStorage.getItem(SS_PIN_UNLOCKED) === em) return true;
+  } catch (_) {}
+
+  // 2. Cek apakah ini adalah refresh halaman (F5 / tarik refresh di HP / tombol reload)
+  if (isPageReload()) {
+    markSessionUnlocked(em);
+    return true;
+  }
+
+  // 3. Cek jarak waktu unload halaman (< 3.5 detik = proses refresh)
+  try {
+    const lastUnload = Number(localStorage.getItem(LS_LAST_UNLOAD) || '0');
+    if (lastUnload > 0 && (Date.now() - lastUnload) < 3500) {
+      markSessionUnlocked(em);
+      return true;
+    }
+  } catch (_) {}
+
+  return false;
+}
+
+// Catat waktu unload saat halaman di-refresh atau ditutup
+window.addEventListener('beforeunload', () => {
+  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) {}
+});
+window.addEventListener('pagehide', () => {
+  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) {}
+});
+
 let gateState = {
   mode: 'auth', // 'auth' | 'set-pin' | 'enter-pin'
   tab: 'login', // 'login' | 'register'
@@ -4005,6 +4144,47 @@ async function tryUpgradeToCloud(email, rawPass) {
   return null;
 }
 
+function showUpdateBanner(msg) {
+  const banner = $('#syncUpdateBanner');
+  if (!banner) return;
+  if (msg) {
+    const textEl = $('#syncBannerText');
+    if (textEl) textEl.textContent = msg;
+  }
+  banner.hidden = false;
+}
+
+function hideUpdateBanner() {
+  const banner = $('#syncUpdateBanner');
+  if (banner) banner.hidden = true;
+}
+
+function computeTradesHash(list) {
+  if (!list || !list.length) return 'empty';
+  return list.map(t => `${t.id}:${t.entry}:${t.exit}:${t.lot}:${t.date}`).sort().join('|');
+}
+
+async function checkForRemoteUpdates() {
+  if (!currentUser || !sbClient || currentUser.isLocalOnly || isSyncing) return;
+  try {
+    const { data, error } = await sbClient
+      .from('trades')
+      .select('id, date, asset, entry, exit, lot')
+      .order('date', { ascending: true });
+
+    if (error || !data) return;
+
+    const cloudHash = computeTradesHash(data);
+    const localHash = computeTradesHash(trades);
+
+    if (cloudHash !== localHash) {
+      const act = data.length < trades.length ? 'penghapusan' : (data.length > trades.length ? 'penambahan' : 'perubahan');
+      showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
+      toast(`Terdeteksi pembaruan data (${act}) dari perangkat lain`, 'ok');
+    }
+  } catch (_) {}
+}
+
 async function syncFromCloud(showFeedback = false) {
   if (!currentUser || !sbClient) return;
 
@@ -4046,7 +4226,7 @@ async function syncFromCloud(showFeedback = false) {
       }
     } catch (_) {}
 
-    // 2. Ambil trades milik user ini
+    // 2. Ambil trades milik user ini dari Supabase Cloud (Single Source of Truth)
     const { data, error } = await sbClient
       .from('trades')
       .select('*')
@@ -4054,9 +4234,26 @@ async function syncFromCloud(showFeedback = false) {
 
     if (error) throw error;
 
-    if (data && data.length > 0) {
-      trades = data.map(t => ({
+    const cloudTrades = (data || []).map(t => ({
+      id: String(t.id),
+      date: t.date,
+      asset: t.asset,
+      position: t.position,
+      entry: Number(t.entry),
+      exit: Number(t.exit),
+      lot: t.lot != null ? Number(t.lot) : 0.01,
+      notes: t.notes || '',
+      createdAt: Number(t.created_at || t.createdAt || Date.now())
+    }));
+
+    const syncInitKey = 'tjd.cloud_init_' + currentUser.id;
+    const hasInitialized = localStorage.getItem(syncInitKey) === '1';
+
+    // Migrasi lokal ke Cloud hanya dilakukan SEKALI saat akun baru pertama kali konek dan cloud masih kosong
+    if (!hasInitialized && cloudTrades.length === 0 && trades.length > 0) {
+      const rowsToUpload = trades.map(t => ({
         id: String(t.id),
+        user_id: currentUser.id,
         date: t.date,
         asset: t.asset,
         position: t.position,
@@ -4064,35 +4261,27 @@ async function syncFromCloud(showFeedback = false) {
         exit: Number(t.exit),
         lot: t.lot != null ? Number(t.lot) : 0.01,
         notes: t.notes || '',
-        createdAt: t.created_at ? Number(t.created_at) : Date.now()
+        created_at: Number(t.createdAt || Date.now())
       }));
+      const { error: insErr } = await sbClient.from('trades').insert(rowsToUpload);
+      if (!insErr) {
+        localStorage.setItem(syncInitKey, '1');
+        if (showFeedback) toast(`${trades.length} trade lokal disimpan ke Cloud`);
+      }
+    } else {
+      // SETELAH INISIALISASI: CLOUD ADALAH SUMBER DATA TUNGGAL
+      // Jika di laptop dihapus (cloudTrades kosong), di HP juga otomatis terhapus!
+      localStorage.setItem(syncInitKey, '1');
+      trades = cloudTrades;
       saveTrades();
       renderAll();
-      if (showFeedback) toast('Sinkronisasi cloud berhasil');
-    } else if (trades.length > 0) {
-      // Cloud masih kosong tapi ada trade lokal: migrasikan otomatis ke cloud user
-      const rows = trades.map(t => ({
-        id: String(t.id),
-        user_id: currentUser.id,
-        date: t.date,
-        asset: t.asset,
-        position: t.position,
-        entry: t.entry,
-        exit: t.exit,
-        lot: t.lot != null ? Number(t.lot) : 0.01,
-        notes: t.notes || '',
-        created_at: t.createdAt || Date.now()
-      }));
-      const { error: insErr } = await sbClient.from('trades').insert(rows);
-      if (!insErr && showFeedback) {
-        toast(`${trades.length} trade lokal berhasil disinkronkan ke cloud`);
-      }
-    } else if (showFeedback) {
-      toast('Akun cloud sudah tersinkronisasi');
+      if (showFeedback) toast('Data tersinkronisasi dengan Cloud');
     }
+
+    hideUpdateBanner();
   } catch (err) {
     console.warn('Sync error:', err);
-    if (showFeedback) toast('Sinkronisasi lokal aktif', 'ok');
+    if (showFeedback) toast('Gagal sinkron Cloud: ' + (err.message || 'Periksa tabel Supabase'), 'err');
   } finally {
     isSyncing = false;
   }
@@ -4112,8 +4301,11 @@ function subscribeRealtime() {
         schema: 'public',
         table: 'trades',
         filter: `user_id=eq.${currentUser.id}`
-      }, () => {
-        syncFromCloud();
+      }, payload => {
+        const ev = payload.eventType;
+        const act = ev === 'DELETE' ? 'penghapusan' : (ev === 'INSERT' ? 'penambahan' : 'perubahan');
+        showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
+        toast(`Pembaruan terdeteksi: Ada ${act} data trade. Silakan refresh atau klik Muat Ulang.`, 'ok');
       })
       .subscribe();
   } catch (e) {
@@ -4122,6 +4314,9 @@ function subscribeRealtime() {
 }
 
 function unlockGate() {
+  if (currentUser && currentUser.email) {
+    markSessionUnlocked(currentUser.email);
+  }
   const gate = $('#authGate');
   if (!gate) return;
   gate.classList.add('unlocking');
@@ -4215,6 +4410,7 @@ function renderAuthGate() {
     };
     $('#btnSwitchAcc').onclick = async () => {
       if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) {} }
+      markSessionUnlocked(null);
       setActiveUserSession(null);
       showGate('auth', { tab: 'login', prefillEmail: '' });
     };
@@ -4571,6 +4767,19 @@ async function initAuth() {
     savedUser = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
   } catch (_) {}
 
+  // Jika hanya refresh halaman dalam sesi yang sama (belum keluar/tutup aplikasi), langsung sembunyikan gate tanpa kedip
+  const gate = $('#authGate');
+  if (savedUser && savedUser.email && getSavedPin(savedUser.email) && isSessionUnlocked(savedUser.email)) {
+    currentUser = savedUser;
+    if (gate) {
+      gate.hidden = true;
+      gate.innerHTML = '';
+    }
+    updateAuthUI();
+    trades = loadTrades();
+    renderAll();
+  }
+
   if (sbClient) {
     try {
       const { data: { session } } = await sbClient.auth.getSession();
@@ -4596,8 +4805,18 @@ async function initAuth() {
     renderAll();
     const pin = getSavedPin(savedUser.email);
     if (pin) {
-      // Sudah pernah login & sudah punya PIN -> langsung minta PIN 4 angka
-      showGate('enter-pin');
+      if (isSessionUnlocked(savedUser.email)) {
+        // Sesi masih aktif (hanya refresh halaman) -> tidak perlu minta PIN lagi
+        if (gate) {
+          gate.hidden = true;
+          gate.innerHTML = '';
+        }
+        syncFromCloud();
+        subscribeRealtime();
+      } else {
+        // Aplikasi baru dibuka kembali setelah ditutup / dihapus dari multitasking -> minta PIN 4 angka
+        showGate('enter-pin');
+      }
     } else {
       // Sudah login tapi belum atur PIN -> minta atur PIN 4 angka
       showGate('set-pin');
@@ -4665,6 +4884,7 @@ function openAuthModal() {
 
   $('#mAuthLockNow').onclick = () => {
     close();
+    markSessionUnlocked(null);
     if (getSavedPin(email)) {
       showGate('enter-pin');
     } else {
@@ -4696,6 +4916,7 @@ function openAuthModal() {
     if (ok) {
       close();
       if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) {} }
+      markSessionUnlocked(null);
       setActiveUserSession(null);
       toast('Berhasil keluar dari akun');
       showGate('auth', { tab: 'login' });
@@ -5826,6 +6047,31 @@ syncPeriodSeg(); syncCumSeg(); syncPosSeg(); updatePreview(); updateFormUI();
 renderAll();
 
 if ($('#btnAuth')) $('#btnAuth').onclick = openAuthModal;
+if ($('#btnApplyUpdate')) {
+  $('#btnApplyUpdate').onclick = async () => {
+    const b = $('#btnApplyUpdate');
+    b.disabled = true;
+    b.textContent = 'Memperbarui...';
+    await syncFromCloud(true);
+    b.disabled = false;
+    b.textContent = 'Muat Ulang Data ↻';
+    hideUpdateBanner();
+  };
+}
+if ($('#btnCloseUpdateBanner')) {
+  $('#btnCloseUpdateBanner').onclick = hideUpdateBanner;
+}
+
+// Cek pembaruan dari perangkat lain saat membuka kembali aplikasi di HP atau fokus layar
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    checkForRemoteUpdates();
+  }
+});
+window.addEventListener('focus', () => {
+  checkForRemoteUpdates();
+});
+
 initAuth();
 
   </script>
