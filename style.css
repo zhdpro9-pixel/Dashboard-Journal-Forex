@@ -896,6 +896,10 @@ tr.trow.open {
   align-items: center
 }
 
+#tSearch {
+  width: 140px
+}
+
 /* ===== Form ===== */
 .form-card.editing {
   border-color: var(--gold)
@@ -2341,13 +2345,21 @@ tr.trow.open {
     padding: 14px 12px 90px
   }
 
-  .card,
-  .card * {
+  .card {
     max-width: 100%
   }
 
   .tscroll {
     max-width: 100%
+  }
+
+  .tscroll table {
+    min-width: 660px;
+    max-width: none
+  }
+
+  .tscroll tbody tr.trow td {
+    white-space: nowrap
   }
 
   .clock {
@@ -2509,21 +2521,37 @@ tr.trow.open {
   }
 
   .tools {
-    gap: 6px;
-    width: 100%
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: 100%;
+    align-items: stretch
   }
 
-  .tools .inp-sm {
+  .tools .inp-sm,
+  .tools select.inp-sm,
+  #tSearch {
     font-size: 12px;
-    padding: 6px 8px;
-    flex: 1;
-    min-width: 0;
-    width: auto
+    padding: 0 10px;
+    height: 36px;
+    width: 100% !important;
+    min-width: 0
   }
 
-  .tools select.inp-sm {
+  .tools>.btn,
+  .tools>.btn.primary.sm {
+    width: 100%;
+    height: 36px;
+    justify-content: center;
+    padding: 0 10px;
+    font-size: 12.5px
+  }
+
+  .detail-actions>.btn,
+  .cd-actions>.btn {
     flex: 1;
-    width: auto
+    height: 34px;
+    justify-content: center
   }
 
   .btn {
@@ -2667,31 +2695,32 @@ tr.trow.open {
 
   table {
     width: 100%;
-    font-size: 11px
+    font-size: 11.5px
   }
 
   thead th {
-    font-size: 9px;
-    padding: 6px 5px
+    font-size: 9.5px;
+    padding: 8px 10px
   }
 
   tbody td {
-    padding: 6px 5px;
-    font-size: 11px
+    padding: 8px 10px;
+    font-size: 12px
   }
 
   .notes-cell {
-    max-width: 100px
+    max-width: 140px
   }
 
   .tools {
-    flex-direction: column;
-    gap: 5px
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px
   }
 
-  .tools .inp-sm {
-    width: 100%;
-    flex: none
+  .tools .inp-sm,
+  #tSearch {
+    width: 100% !important
   }
 
   .btn {
