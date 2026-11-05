@@ -92,21 +92,33 @@ function getDeletedTradeIds(email) {
   if (!email) return new Set();
   try {
     const arr = JSON.parse(localStorage.getItem(LS_DELETED_PREFIX + email.toLowerCase()) || '[]');
-    return new Set(Array.isArray(arr) ? arr : []);
+    return new Set(Array.isArray(arr) ? arr.map(String) : []);
   } catch (_) { return new Set(); }
+}
+function saveDeletedTradeIds(email, setObj) {
+  if (!email) return;
+  const arr = [...setObj].slice(-500);
+  try { localStorage.setItem(LS_DELETED_PREFIX + email.toLowerCase(), JSON.stringify(arr)); } catch (_) { }
 }
 function addDeletedTradeId(email, id) {
   if (!email || !id) return;
   const s = getDeletedTradeIds(email);
   s.add(String(id));
-  try { localStorage.setItem(LS_DELETED_PREFIX + email.toLowerCase(), JSON.stringify([...s])); } catch (_) { }
+  saveDeletedTradeIds(email, s);
 }
 function removeDeletedTradeId(email, id) {
   if (!email || !id) return;
   const s = getDeletedTradeIds(email);
   if (s.delete(String(id))) {
-    try { localStorage.setItem(LS_DELETED_PREFIX + email.toLowerCase(), JSON.stringify([...s])); } catch (_) { }
+    saveDeletedTradeIds(email, s);
   }
+}
+async function syncDeletedIdsToCloud(email) {
+  if (!email || !sbClient || !currentUser || currentUser.isLocalOnly) return;
+  try {
+    const arr = [...getDeletedTradeIds(email)].slice(-300);
+    await sbClient.auth.updateUser({ data: { deleted_trades: arr } });
+  } catch (_) { }
 }
 function getUserTradesKey() {
   if (currentUser && currentUser.email) {
@@ -536,74 +548,120 @@ function hideUpdateBanner() {
 
 function computeTradesHash(list) {
   if (!list || !list.length) return 'empty';
-  return list.map(t => `${t.id}:${t.entry}:${t.exit}:${t.lot}:${t.date}`).sort().join('|');
+  return list
+    .map(t => `${String(t.id)}:${t.date || ''}:${t.asset || ''}:${t.position || ''}:${Number(t.entry)}:${Number(t.exit)}:${Number(t.lot ?? 0.01)}:${(t.notes || '').trim()}`)
+    .sort()
+    .join('|');
+}
+
+async function ensureCloudSession() {
+  if (!sbClient || !currentUser || !currentUser.email) return false;
+  try {
+    const { data: { session } } = await sbClient.auth.getSession();
+    if (session?.user) {
+      if (currentUser.isLocalOnly || currentUser.id !== session.user.id) {
+        currentUser = { id: session.user.id, email: session.user.email.toLowerCase(), isLocalOnly: false };
+        setActiveUserSession(currentUser);
+      }
+      const cloudDeleted = session.user.user_metadata?.deleted_trades;
+      if (Array.isArray(cloudDeleted) && cloudDeleted.length) {
+        const s = getDeletedTradeIds(currentUser.email);
+        cloudDeleted.forEach(id => s.add(String(id)));
+        saveDeletedTradeIds(currentUser.email, s);
+      }
+      return true;
+    }
+    const rec = getAccountRecord(currentUser.email);
+    if (rec && rec.rawPassB64) {
+      const rawPass = decodeURIComponent(escape(atob(rec.rawPassB64)));
+      const { data: sData, error: sErr } = await sbClient.auth.signInWithPassword({
+        email: currentUser.email,
+        password: rawPass
+      });
+      if (!sErr && sData?.user) {
+        currentUser = { id: sData.user.id, email: sData.user.email.toLowerCase(), isLocalOnly: false };
+        setActiveUserSession(currentUser);
+        const cloudDeleted = sData.user.user_metadata?.deleted_trades;
+        if (Array.isArray(cloudDeleted) && cloudDeleted.length) {
+          const s = getDeletedTradeIds(currentUser.email);
+          cloudDeleted.forEach(id => s.add(String(id)));
+          saveDeletedTradeIds(currentUser.email, s);
+        }
+        return true;
+      }
+      const cloudUser = await tryUpgradeToCloud(currentUser.email, rawPass);
+      if (cloudUser) {
+        currentUser = { id: cloudUser.id, email: cloudUser.email.toLowerCase(), isLocalOnly: false };
+        setActiveUserSession(currentUser);
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn('ensureCloudSession error:', e);
+  }
+  return !currentUser.isLocalOnly;
 }
 
 async function checkForRemoteUpdates() {
-  if (!currentUser || !sbClient || currentUser.isLocalOnly || isSyncing) return;
+  if (!currentUser || !sbClient || isSyncing) return;
+  if (trades.some(t => t._unsynced)) {
+    syncFromCloud(false, true);
+    return;
+  }
   try {
+    const okSession = await ensureCloudSession();
+    if (!okSession || currentUser.isLocalOnly) return;
+
     const { data, error } = await sbClient
       .from('trades')
-      .select('id, date, asset, entry, exit, lot')
+      .select('id, date, asset, position, entry, exit, lot, notes')
       .order('date', { ascending: true });
 
     if (error || !data) return;
 
-    const cloudHash = computeTradesHash(data);
+    const deletedSet = getDeletedTradeIds(currentUser.email);
+    const validRemote = data.filter(t => !deletedSet.has(String(t.id)));
+
+    const cloudHash = computeTradesHash(validRemote);
     const localHash = computeTradesHash(trades);
 
     if (cloudHash !== localHash) {
-      const act = data.length < trades.length ? 'penghapusan' : (data.length > trades.length ? 'penambahan' : 'perubahan');
+      const act = validRemote.length < trades.length ? 'penghapusan' : (validRemote.length > trades.length ? 'penambahan' : 'perubahan');
       showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
-      toast(`Terdeteksi pembaruan data (${act}) dari perangkat lain`, 'ok');
+      toast(`Pembaruan data (${act}) dari perangkat lain telah diterapkan`, 'ok');
+      await syncFromCloud(false, true);
     }
   } catch (_) {}
 }
 
-async function syncFromCloud(showFeedback = false) {
-  if (!currentUser || !sbClient) return;
+async function syncFromCloud(showFeedback = false, keepBanner = false) {
+  if (!currentUser || !sbClient || isSyncing) return;
 
-  // 0. Jika session cloud belum login atau token hilang, coba re-login otomatis dengan credential tersimpan
-  if (!currentUser.isLocalOnly) {
-    try {
-      const { data: { session } } = await sbClient.auth.getSession();
-      if (!session?.user) {
-        const rec = getAccountRecord(currentUser.email);
-        if (rec && rec.rawPassB64) {
-          const rawPass = decodeURIComponent(escape(atob(rec.rawPassB64)));
-          await sbClient.auth.signInWithPassword({ email: currentUser.email, password: rawPass });
-        }
-      }
-    } catch (_) { }
-  }
-
-  // Jika sebelumnya login lokal karena belum jalankan SQL, coba upgrade otomatis ke sesi Cloud
-  if (currentUser.isLocalOnly) {
-    const rec = getAccountRecord(currentUser.email);
-    if (rec && rec.rawPassB64) {
-      try {
-        const rawPass = decodeURIComponent(escape(atob(rec.rawPassB64)));
-        const cloudUser = await tryUpgradeToCloud(currentUser.email, rawPass);
-        if (cloudUser) {
-          currentUser = { id: cloudUser.id, email: cloudUser.email, isLocalOnly: false };
-          setActiveUserSession(currentUser);
-          if (cloudUser.user_metadata?.pin && /^\d{4}$/.test(cloudUser.user_metadata.pin)) {
-            upsertAccountRecord(currentUser.email, { id: cloudUser.id, pin: cloudUser.user_metadata.pin });
-          } else if (rec.pin) {
-            sbClient.auth.updateUser({ data: { pin: rec.pin } }).catch(() => {});
-          }
-        }
-      } catch (_) {}
-    }
-  }
-
-  if (currentUser.isLocalOnly) {
+  const okSession = await ensureCloudSession();
+  if (!okSession || currentUser.isLocalOnly) {
     if (showFeedback) toast('Data tersimpan aman di perangkat (jalankan SQL Supabase untuk sinkron cloud)');
     return;
   }
 
   isSyncing = true;
   try {
+    const emailKey = currentUser.email.toLowerCase();
+    const initKey = 'tjd.cloud_init.' + emailKey;
+    const wasInitialized = localStorage.getItem(initKey) === '1';
+    const prevHash = computeTradesHash(trades);
+    const prevCount = trades.length;
+
+    // 0. Sinkronkan daftar deleted_trades terbaru dari user_metadata jika ada
+    try {
+      const { data: uData } = await sbClient.auth.getUser();
+      const cloudDeleted = uData?.user?.user_metadata?.deleted_trades;
+      if (Array.isArray(cloudDeleted) && cloudDeleted.length) {
+        const s = getDeletedTradeIds(emailKey);
+        cloudDeleted.forEach(id => s.add(String(id)));
+        saveDeletedTradeIds(emailKey, s);
+      }
+    } catch (_) {}
+
     // 1. Ambil custom pairs jika ada
     try {
       const { data: cPairs } = await sbClient.from('custom_pairs').select('pair');
@@ -632,19 +690,29 @@ async function syncFromCloud(showFeedback = false) {
       exit: Number(t.exit),
       lot: t.lot != null ? Number(t.lot) : 0.01,
       notes: t.notes || '',
-      createdAt: Number(t.created_at || t.createdAt || Date.now())
+      createdAt: Number(t.created_at || t.createdAt || Date.now()),
+      _synced: true
     }));
 
-    const deletedSet = getDeletedTradeIds(currentUser.email);
+    const deletedSet = getDeletedTradeIds(emailKey);
+
+    // 3. Hapus dari cloud jika ada trade yang tercatat dihapus tapi masih ada di cloud
+    const toDeleteFromCloud = cloudTrades.filter(t => deletedSet.has(String(t.id)));
+    if (toDeleteFromCloud.length > 0) {
+      await Promise.all(
+        toDeleteFromCloud.map(dt => sbClient.from('trades').delete().eq('id', String(dt.id)))
+      );
+    }
 
     // Filter trade cloud yang sudah dihapus
     const validCloudTrades = cloudTrades.filter(t => !deletedSet.has(String(t.id)));
 
-    // Temukan trade lokal yang belum ada di Cloud dan belum dihapus (AGAR TIDAK PERNAH HILANG!)
-    const cloudIdSet = new Set(validCloudTrades.map(t => String(t.id)));
-    const pendingLocalTrades = trades.filter(t => !cloudIdSet.has(String(t.id)) && !deletedSet.has(String(t.id)));
+    // 4. Hanya unggah trade lokal yang benar-benar baru/diedit (_unsynced === true) atau migrasi pertama kali saat cloud masih kosong
+    const isFirstMigration = !wasInitialized && cloudTrades.length === 0 && trades.length > 0;
+    const pendingLocalTrades = trades.filter(t =>
+      !deletedSet.has(String(t.id)) && (t._unsynced === true || isFirstMigration)
+    );
 
-    // Unggah trade lokal yang belum ada di Cloud ke Supabase
     if (pendingLocalTrades.length > 0) {
       const rowsToUpload = pendingLocalTrades.map(t => ({
         id: String(t.id),
@@ -658,34 +726,39 @@ async function syncFromCloud(showFeedback = false) {
         notes: t.notes || '',
         created_at: Number(t.createdAt || Date.now())
       }));
-      try {
-        await sbClient.from('trades').insert(rowsToUpload);
-      } catch (e) {
-        console.warn('Sync upload pending trades error:', e);
+      const { error: upErr } = await sbClient.from('trades').upsert(rowsToUpload);
+      if (!upErr) {
+        pendingLocalTrades.forEach(t => {
+          delete t._unsynced;
+          t._synced = true;
+        });
+      } else {
+        console.warn('Sync upload pending trades error:', upErr);
       }
     }
 
-    // Hapus dari cloud jika ada trade yang tercatat dihapus tapi masih ada di cloud
-    const toDeleteFromCloud = cloudTrades.filter(t => deletedSet.has(String(t.id)));
-    if (toDeleteFromCloud.length > 0) {
-      for (const dt of toDeleteFromCloud) {
-        sbClient.from('trades').delete().eq('id', dt.id).catch(() => { });
-      }
-    }
-
-    // Gabungkan: Cloud trades + pending local trades tanpa duplikasi
+    // 5. Gabungkan: validCloudTrades + pendingLocalTrades (trade lama yang tidak ada di validCloudTrades berarti telah dihapus di perangkat lain!)
     const mergedMap = new Map();
     validCloudTrades.forEach(t => mergedMap.set(String(t.id), t));
     pendingLocalTrades.forEach(t => mergedMap.set(String(t.id), t));
     const finalTrades = Array.from(mergedMap.values());
     finalTrades.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.createdAt || 0) - (b.createdAt || 0));
 
+    const newHash = computeTradesHash(finalTrades);
     trades = finalTrades;
     saveTrades();
+    try { localStorage.setItem(initKey, '1'); } catch (_) {}
     renderAll();
-    if (showFeedback) toast('Data tersinkronisasi dengan Cloud');
 
-    hideUpdateBanner();
+    if (showFeedback) {
+      toast('Data tersinkronisasi dengan Cloud');
+      hideUpdateBanner();
+    } else if (wasInitialized && prevHash !== newHash) {
+      const act = finalTrades.length < prevCount ? 'penghapusan' : (finalTrades.length > prevCount ? 'penambahan' : 'perubahan');
+      showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
+    } else if (!keepBanner) {
+      hideUpdateBanner();
+    }
   } catch (err) {
     console.warn('Sync error:', err);
     if (showFeedback) toast('Gagal sinkron Cloud: ' + (err.message || 'Periksa tabel Supabase'), 'err');
@@ -706,16 +779,13 @@ function subscribeRealtime() {
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'trades',
-        filter: `user_id=eq.${currentUser.id}`
+        table: 'trades'
       }, payload => {
         const ev = payload.eventType;
         if (ev === 'DELETE' && payload.old?.id) {
           addDeletedTradeId(currentUser?.email, payload.old.id);
         }
-        const act = ev === 'DELETE' ? 'penghapusan' : (ev === 'INSERT' ? 'penambahan' : 'perubahan');
-        showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
-        toast(`Pembaruan terdeteksi: Ada ${act} data trade. Silakan refresh atau klik Muat Ulang.`, 'ok');
+        checkForRemoteUpdates();
       })
       .subscribe();
   } catch (e) {
@@ -1406,7 +1476,9 @@ function renderStatCards(m, arr) {
     updateVal('vCum', m.total ? cumVal : null, v => fmtPct(v), pcls(cumVal));
     updateVal('vBest', best ? tradeRet(best) : null, v => fmtPct(v), best ? pcls(tradeRet(best)) : '');
     updateVal('vDD', m.total ? m.maxDD : null, v => fmtPct(v), pcls(m.maxDD));
+  }
 
+  if (!isInitialBuild) {
     const cards = box.querySelectorAll('.card.stat');
     if (cards.length >= 6) {
       const sub0 = cards[0].querySelector('.stat-sub');
@@ -1414,6 +1486,8 @@ function renderStatCards(m, arr) {
       const barW = cards[1].querySelector('.wl-bar .w'), barL = cards[1].querySelector('.wl-bar .l');
       if (barW) barW.style.width = `${wrW}%`;
       if (barL) barL.style.width = `${wrL}%`;
+      const sub3 = cards[3].querySelector('.stat-sub');
+      if (sub3) sub3.innerHTML = `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px">${sparkSVG(series)}<span>${state.cumMethod === 'comp' ? 'Compounded' : 'Simple'}</span></div>`;
       const sub4 = cards[4].querySelector('.stat-sub');
       if (sub4) sub4.textContent = best ? `${esc(best.asset) || '—'} · ${fmtDate(best.date)} · ${best.position}` : '—';
     }
@@ -1719,9 +1793,14 @@ async function deleteTrade(id) {
   addDeletedTradeId(currentUser?.email, id);
   saveTrades(); renderAll(); toast('Trade dihapus');
   if (currentUser && !currentUser.isLocalOnly && sbClient) {
-    sbClient.from('trades').delete().eq('id', id).then(({ error }) => {
+    try {
+      await ensureCloudSession();
+      const { error } = await sbClient.from('trades').delete().eq('id', String(id));
       if (error) console.error('Cloud delete trade error:', error);
-    });
+      syncDeletedIdsToCloud(currentUser?.email);
+    } catch (err) {
+      console.error('Cloud delete exception:', err);
+    }
   }
 }
 
@@ -1746,37 +1825,69 @@ $('#tradeForm').addEventListener('submit', e => {
   errBox.hidden = true;
   if (state.editingId) {
     const t = trades.find(x => x.id === state.editingId);
-    Object.assign(t, { date, asset, position: formPos, entry, exit, lot, notes });
+    Object.assign(t, { date, asset, position: formPos, entry, exit, lot, notes, _unsynced: true });
     saveTrades();
     toast('Perubahan trade disimpan');
     if (currentUser && !currentUser.isLocalOnly && sbClient) {
-      sbClient.from('trades').update({
-        date, asset, position: formPos, entry, exit, lot, notes
-      }).eq('id', t.id).then(({ error }) => {
-        if (error) console.error('Cloud update trade error:', error);
-      });
+      (async () => {
+        try {
+          await ensureCloudSession();
+          const { error } = await sbClient.from('trades').upsert([{
+            id: String(t.id),
+            user_id: currentUser.id,
+            date: t.date,
+            asset: t.asset,
+            position: t.position,
+            entry: t.entry,
+            exit: t.exit,
+            lot: t.lot,
+            notes: t.notes,
+            created_at: t.createdAt || Date.now()
+          }]);
+          if (error) console.error('Cloud update trade error:', error);
+          else {
+            delete t._unsynced;
+            t._synced = true;
+            saveTrades();
+          }
+        } catch (err) {
+          console.error('Cloud update exception:', err);
+        }
+      })();
     }
   } else {
-    const newTrade = { id: uid(), date, asset, position: formPos, entry, exit, lot, notes, createdAt: Date.now() };
+    const newTrade = { id: uid(), date, asset, position: formPos, entry, exit, lot, notes, createdAt: Date.now(), _unsynced: true };
     removeDeletedTradeId(currentUser?.email, newTrade.id);
     trades.push(newTrade);
     saveTrades(); // Segera simpan ke localStorage agar tidak hilang saat refresh!
     toast('Trade berhasil dicatat');
     if (currentUser && !currentUser.isLocalOnly && sbClient) {
-      sbClient.from('trades').insert([{
-        id: newTrade.id,
-        user_id: currentUser.id,
-        date: newTrade.date,
-        asset: newTrade.asset,
-        position: newTrade.position,
-        entry: newTrade.entry,
-        exit: newTrade.exit,
-        lot: newTrade.lot,
-        notes: newTrade.notes,
-        created_at: newTrade.createdAt
-      }]).then(({ error }) => {
-        if (error) console.warn('Cloud insert trade error (tersimpan lokal):', error);
-      });
+      (async () => {
+        try {
+          await ensureCloudSession();
+          const { error } = await sbClient.from('trades').upsert([{
+            id: String(newTrade.id),
+            user_id: currentUser.id,
+            date: newTrade.date,
+            asset: newTrade.asset,
+            position: newTrade.position,
+            entry: newTrade.entry,
+            exit: newTrade.exit,
+            lot: newTrade.lot,
+            notes: newTrade.notes,
+            created_at: newTrade.createdAt
+          }]);
+          if (error) console.warn('Cloud insert trade error (tersimpan lokal):', error);
+          else {
+            delete newTrade._unsynced;
+            newTrade._synced = true;
+            saveTrades();
+          }
+          syncDeletedIdsToCloud(currentUser?.email);
+        } catch (err) {
+          console.warn('Cloud insert exception:', err);
+        }
+      })();
     }
   }
   state.editingId = null; resetForm(); updateFormUI(); renderAll();
@@ -2369,9 +2480,14 @@ $('#btnClearAll').onclick = async () => {
   renderAll();
   toast('Semua data dihapus');
   if (currentUser && !currentUser.isLocalOnly && sbClient) {
-    sbClient.from('trades').delete().eq('user_id', currentUser.id).then(({ error }) => {
+    try {
+      await ensureCloudSession();
+      const { error } = await sbClient.from('trades').delete().eq('user_id', currentUser.id);
       if (error) console.error('Cloud clear trades error:', error);
-    });
+      syncDeletedIdsToCloud(currentUser?.email);
+    } catch (err) {
+      console.error('Cloud clear exception:', err);
+    }
   }
 };
 $('#btnInfo').onclick = () => infoBox('Metrik & Penyimpanan', `
@@ -2533,7 +2649,7 @@ if ($('#btnCloseUpdateBanner')) {
   $('#btnCloseUpdateBanner').onclick = hideUpdateBanner;
 }
 
-// Cek pembaruan dari perangkat lain saat membuka kembali aplikasi di HP atau fokus layar
+// Cek pembaruan dari perangkat lain saat membuka kembali aplikasi di HP, fokus layar, maupun secara berkala saat halaman aktif
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     checkForRemoteUpdates();
@@ -2542,5 +2658,10 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('focus', () => {
   checkForRemoteUpdates();
 });
+setInterval(() => {
+  if (document.visibilityState === 'visible') {
+    checkForRemoteUpdates();
+  }
+}, 4000);
 
 initAuth();
