@@ -4,6 +4,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>Trading Journey — Performance Dashboard</title>
   <link rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='8' width='5' height='9' rx='1' fill='%2316c784'/%3E%3Crect x='14' y='5' width='5' height='8' rx='1' fill='%23f6465d'/%3E%3C/svg%3E">
@@ -13,7 +16,7 @@
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
     rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="style.css?v=20261105c">
+  <link rel="stylesheet" href="style.css?v=20261105d">
 </head>
 
 <body>
@@ -585,17 +588,7 @@
   <div id="modalRoot"></div>
   <div id="authGate" class="auth-gate" hidden></div>
 
-  <!-- Update Notification Banner -->
-  <div id="syncUpdateBanner" class="sync-banner" hidden>
-    <div class="sync-banner-content">
-      <span class="sync-banner-icon">🔔</span>
-      <span class="sync-banner-text" id="syncBannerText">Ada pembaruan data trading dari perangkat lain.</span>
-      <button type="button" class="btn primary sm" id="btnApplyUpdate">Muat Ulang Data ↻</button>
-      <button type="button" class="sync-banner-close" id="btnCloseUpdateBanner" title="Tutup">✕</button>
-    </div>
-  </div>
-
-  <script src="script.js?v=20261105c"></script>
+  <script src="script.js?v=20261105d"></script>
 </body>
 
 </html>

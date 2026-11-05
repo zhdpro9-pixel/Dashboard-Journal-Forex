@@ -532,14 +532,17 @@ async function tryUpgradeToCloud(email, rawPass) {
 }
 
 function showUpdateBanner() {
-  // Dinonaktifkan: sinkronisasi otomatis cukup menggunakan toast di bawah
   hideUpdateBanner();
 }
 
 function hideUpdateBanner() {
   const banner = $('#syncUpdateBanner');
-  if (banner) banner.hidden = true;
+  if (banner) {
+    banner.hidden = true;
+    banner.remove();
+  }
 }
+hideUpdateBanner();
 
 function computeTradesHash(list) {
   if (!list || !list.length) return 'empty';
