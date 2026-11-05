@@ -605,7 +605,7 @@ async function ensureCloudSession() {
 async function checkForRemoteUpdates() {
   if (!currentUser || !sbClient || isSyncing) return;
   if (trades.some(t => t._unsynced)) {
-    syncFromCloud(false, true);
+    syncFromCloud(false);
     return;
   }
   try {
@@ -626,15 +626,12 @@ async function checkForRemoteUpdates() {
     const localHash = computeTradesHash(trades);
 
     if (cloudHash !== localHash) {
-      const act = validRemote.length < trades.length ? 'penghapusan' : (validRemote.length > trades.length ? 'penambahan' : 'perubahan');
-      showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
-      toast(`Pembaruan data (${act}) dari perangkat lain telah diterapkan`, 'ok');
-      await syncFromCloud(false, true);
+      await syncFromCloud(false);
     }
   } catch (_) {}
 }
 
-async function syncFromCloud(showFeedback = false, keepBanner = false) {
+async function syncFromCloud(showFeedback = false) {
   if (!currentUser || !sbClient || isSyncing) return;
 
   const okSession = await ensureCloudSession();
@@ -755,8 +752,9 @@ async function syncFromCloud(showFeedback = false, keepBanner = false) {
       hideUpdateBanner();
     } else if (wasInitialized && prevHash !== newHash) {
       const act = finalTrades.length < prevCount ? 'penghapusan' : (finalTrades.length > prevCount ? 'penambahan' : 'perubahan');
-      showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
-    } else if (!keepBanner) {
+      toast(`Data diperbarui otomatis (${act} dari perangkat lain)`);
+      hideUpdateBanner();
+    } else {
       hideUpdateBanner();
     }
   } catch (err) {
