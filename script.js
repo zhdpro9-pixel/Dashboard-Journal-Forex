@@ -531,14 +531,9 @@ async function tryUpgradeToCloud(email, rawPass) {
   return null;
 }
 
-function showUpdateBanner(msg) {
-  const banner = $('#syncUpdateBanner');
-  if (!banner) return;
-  if (msg) {
-    const textEl = $('#syncBannerText');
-    if (textEl) textEl.textContent = msg;
-  }
-  banner.hidden = false;
+function showUpdateBanner() {
+  // Dinonaktifkan: sinkronisasi otomatis cukup menggunakan toast di bawah
+  hideUpdateBanner();
 }
 
 function hideUpdateBanner() {
