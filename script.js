@@ -87,6 +87,27 @@ function simpleHash(str) {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
+const LS_DELETED_PREFIX = 'tjd.deleted_trades.u.';
+function getDeletedTradeIds(email) {
+  if (!email) return new Set();
+  try {
+    const arr = JSON.parse(localStorage.getItem(LS_DELETED_PREFIX + email.toLowerCase()) || '[]');
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch (_) { return new Set(); }
+}
+function addDeletedTradeId(email, id) {
+  if (!email || !id) return;
+  const s = getDeletedTradeIds(email);
+  s.add(String(id));
+  try { localStorage.setItem(LS_DELETED_PREFIX + email.toLowerCase(), JSON.stringify([...s])); } catch (_) { }
+}
+function removeDeletedTradeId(email, id) {
+  if (!email || !id) return;
+  const s = getDeletedTradeIds(email);
+  if (s.delete(String(id))) {
+    try { localStorage.setItem(LS_DELETED_PREFIX + email.toLowerCase(), JSON.stringify([...s])); } catch (_) { }
+  }
+}
 function getUserTradesKey() {
   if (currentUser && currentUser.email) {
     return 'tjd.trades.u.' + currentUser.email.toLowerCase();
@@ -110,8 +131,9 @@ function loadTrades() {
       localStorage.setItem('tjd.migrated.' + key, '1');
     }
     const r = JSON.parse(raw || '[]');
+    const deletedSet = getDeletedTradeIds(currentUser?.email);
     return Array.isArray(r)
-      ? r.filter(t => t && t.date && t.entry > 0 && t.exit > 0).map(t => {
+      ? r.filter(t => t && t.date && t.entry > 0 && t.exit > 0 && !deletedSet.has(String(t.id))).map(t => {
           if (t.lot == null && t.capital != null) t.lot = 0.10;
           return t;
         })
@@ -541,6 +563,20 @@ async function checkForRemoteUpdates() {
 async function syncFromCloud(showFeedback = false) {
   if (!currentUser || !sbClient) return;
 
+  // 0. Jika session cloud belum login atau token hilang, coba re-login otomatis dengan credential tersimpan
+  if (!currentUser.isLocalOnly) {
+    try {
+      const { data: { session } } = await sbClient.auth.getSession();
+      if (!session?.user) {
+        const rec = getAccountRecord(currentUser.email);
+        if (rec && rec.rawPassB64) {
+          const rawPass = decodeURIComponent(escape(atob(rec.rawPassB64)));
+          await sbClient.auth.signInWithPassword({ email: currentUser.email, password: rawPass });
+        }
+      }
+    } catch (_) { }
+  }
+
   // Jika sebelumnya login lokal karena belum jalankan SQL, coba upgrade otomatis ke sesi Cloud
   if (currentUser.isLocalOnly) {
     const rec = getAccountRecord(currentUser.email);
@@ -579,7 +615,7 @@ async function syncFromCloud(showFeedback = false) {
       }
     } catch (_) {}
 
-    // 2. Ambil trades milik user ini dari Supabase Cloud (Single Source of Truth)
+    // 2. Ambil trades milik user ini dari Supabase Cloud
     const { data, error } = await sbClient
       .from('trades')
       .select('*')
@@ -599,12 +635,18 @@ async function syncFromCloud(showFeedback = false) {
       createdAt: Number(t.created_at || t.createdAt || Date.now())
     }));
 
-    const syncInitKey = 'tjd.cloud_init_' + currentUser.id;
-    const hasInitialized = localStorage.getItem(syncInitKey) === '1';
+    const deletedSet = getDeletedTradeIds(currentUser.email);
 
-    // Migrasi lokal ke Cloud hanya dilakukan SEKALI saat akun baru pertama kali konek dan cloud masih kosong
-    if (!hasInitialized && cloudTrades.length === 0 && trades.length > 0) {
-      const rowsToUpload = trades.map(t => ({
+    // Filter trade cloud yang sudah dihapus
+    const validCloudTrades = cloudTrades.filter(t => !deletedSet.has(String(t.id)));
+
+    // Temukan trade lokal yang belum ada di Cloud dan belum dihapus (AGAR TIDAK PERNAH HILANG!)
+    const cloudIdSet = new Set(validCloudTrades.map(t => String(t.id)));
+    const pendingLocalTrades = trades.filter(t => !cloudIdSet.has(String(t.id)) && !deletedSet.has(String(t.id)));
+
+    // Unggah trade lokal yang belum ada di Cloud ke Supabase
+    if (pendingLocalTrades.length > 0) {
+      const rowsToUpload = pendingLocalTrades.map(t => ({
         id: String(t.id),
         user_id: currentUser.id,
         date: t.date,
@@ -616,20 +658,32 @@ async function syncFromCloud(showFeedback = false) {
         notes: t.notes || '',
         created_at: Number(t.createdAt || Date.now())
       }));
-      const { error: insErr } = await sbClient.from('trades').insert(rowsToUpload);
-      if (!insErr) {
-        localStorage.setItem(syncInitKey, '1');
-        if (showFeedback) toast(`${trades.length} trade lokal disimpan ke Cloud`);
+      try {
+        await sbClient.from('trades').insert(rowsToUpload);
+      } catch (e) {
+        console.warn('Sync upload pending trades error:', e);
       }
-    } else {
-      // SETELAH INISIALISASI: CLOUD ADALAH SUMBER DATA TUNGGAL
-      // Jika di laptop dihapus (cloudTrades kosong), di HP juga otomatis terhapus!
-      localStorage.setItem(syncInitKey, '1');
-      trades = cloudTrades;
-      saveTrades();
-      renderAll();
-      if (showFeedback) toast('Data tersinkronisasi dengan Cloud');
     }
+
+    // Hapus dari cloud jika ada trade yang tercatat dihapus tapi masih ada di cloud
+    const toDeleteFromCloud = cloudTrades.filter(t => deletedSet.has(String(t.id)));
+    if (toDeleteFromCloud.length > 0) {
+      for (const dt of toDeleteFromCloud) {
+        sbClient.from('trades').delete().eq('id', dt.id).catch(() => { });
+      }
+    }
+
+    // Gabungkan: Cloud trades + pending local trades tanpa duplikasi
+    const mergedMap = new Map();
+    validCloudTrades.forEach(t => mergedMap.set(String(t.id), t));
+    pendingLocalTrades.forEach(t => mergedMap.set(String(t.id), t));
+    const finalTrades = Array.from(mergedMap.values());
+    finalTrades.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.createdAt || 0) - (b.createdAt || 0));
+
+    trades = finalTrades;
+    saveTrades();
+    renderAll();
+    if (showFeedback) toast('Data tersinkronisasi dengan Cloud');
 
     hideUpdateBanner();
   } catch (err) {
@@ -643,7 +697,7 @@ async function syncFromCloud(showFeedback = false) {
 function subscribeRealtime() {
   if (!sbClient || !currentUser || currentUser.isLocalOnly) return;
   if (realtimeChannel) {
-    try { sbClient.removeChannel(realtimeChannel); } catch (_) {}
+    try { sbClient.removeChannel(realtimeChannel); } catch (_) { }
     realtimeChannel = null;
   }
   try {
@@ -656,6 +710,9 @@ function subscribeRealtime() {
         filter: `user_id=eq.${currentUser.id}`
       }, payload => {
         const ev = payload.eventType;
+        if (ev === 'DELETE' && payload.old?.id) {
+          addDeletedTradeId(currentUser?.email, payload.old.id);
+        }
         const act = ev === 'DELETE' ? 'penghapusan' : (ev === 'INSERT' ? 'penambahan' : 'perubahan');
         showUpdateBanner(`Ada pembaruan data (${act}) dari perangkat lain.`);
         toast(`Pembaruan terdeteksi: Ada ${act} data trade. Silakan refresh atau klik Muat Ulang.`, 'ok');
@@ -1208,7 +1265,7 @@ function openAuthModal() {
         </div>
       </div>
 
-      <div style="background:rgba(15,23,42,.6);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+      <div style="background:#0d0d10;border:1px solid var(--line);border-radius:4px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
         <span style="color:var(--mut);font-size:13px">Total Trade Tercatat:</span>
         <span style="font:700 15px var(--font-m);color:var(--gold)">${trades.length} trade</span>
       </div>
@@ -1300,28 +1357,67 @@ function sparkSVG(series) {
 
 function renderStatCards(m, arr) {
   const box = $('#statCards');
+  if (!box) return;
   const best = arr.length ? arr.reduce((a, b) => tradeRet(b) > tradeRet(a) ? b : a) : null;
   const days = new Set(arr.map(t => t.date)).size;
   const cumVal = state.cumMethod === 'comp' ? m.comp : m.simple;
   const series = state.cumMethod === 'comp' ? m.curve : [0, ...m.simpleCurve];
   const wrW = m.total ? m.wins / m.total * 100 : 0, wrL = m.total ? m.losses / m.total * 100 : 0;
-  box.innerHTML =
-    statCard(0, 'Total Trades', `<span id="vTotal"></span>`, `${m.wins}W · ${m.losses}L${m.be ? ` · ${m.be} BE` : ''} · ${days} hari aktif`) +
-    statCard(1, 'Win Rate', `<span id="vWR"></span>`, `<div class="wl-bar" style="width:100%"><i class="w" style="width:${wrW}%"></i><i class="l" style="width:${wrL}%"></i></div>`) +
-    statCard(2, 'Avg Return / Trade', `<span id="vAvg"></span>`, 'Rata-rata return — hanya trade tercatat') +
-    statCard(3, 'Cumulative Return', `<span id="vCum"></span>`, `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px">${sparkSVG(series)}<span>${state.cumMethod === 'comp' ? 'Compounded' : 'Simple'}</span></div>`) +
-    statCard(4, 'Best Trade', `<span id="vBest"></span>`, best ? `${esc(best.asset) || '—'} · ${fmtDate(best.date)} · ${best.position}` : '—') +
-    statCard(5, 'Max Drawdown', `<span id="vDD"></span>`, 'Compounded · puncak → lembah');
-  const set = (id, v, fmt, cls) => {
-    const n = $('#' + id); if (v == null) { n.textContent = '—'; n._v = 0; return }
-    if (cls) n.classList.add(cls); tween(n, v, fmt)
-  };
-  set('vTotal', m.total, v => fmtInt(Math.round(v)));
-  set('vWR', m.winRate, v => fmtPct(v, 1));
-  set('vAvg', m.avg, v => fmtPct(v), pcls(m.avg));
-  set('vCum', m.total ? cumVal : null, v => fmtPct(v), pcls(cumVal));
-  set('vBest', best ? tradeRet(best) : null, v => fmtPct(v), best ? pcls(tradeRet(best)) : '');
-  set('vDD', m.total ? m.maxDD : null, v => fmtPct(v), pcls(m.maxDD));
+
+  const existingTotal = $('#vTotal');
+  const isInitialBuild = !existingTotal || box.children.length === 0;
+
+  if (isInitialBuild) {
+    box.innerHTML =
+      statCard(0, 'Total Trades', `<span id="vTotal"></span>`, `${m.wins}W · ${m.losses}L${m.be ? ` · ${m.be} BE` : ''} · ${days} hari aktif`) +
+      statCard(1, 'Win Rate', `<span id="vWR"></span>`, `<div class="wl-bar" style="width:100%"><i class="w" style="width:${wrW}%"></i><i class="l" style="width:${wrL}%"></i></div>`) +
+      statCard(2, 'Avg Return / Trade', `<span id="vAvg"></span>`, 'Rata-rata return — hanya trade tercatat') +
+      statCard(3, 'Cumulative Return', `<span id="vCum"></span>`, `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px">${sparkSVG(series)}<span>${state.cumMethod === 'comp' ? 'Compounded' : 'Simple'}</span></div>`) +
+      statCard(4, 'Best Trade', `<span id="vBest"></span>`, best ? `${esc(best.asset) || '—'} · ${fmtDate(best.date)} · ${best.position}` : '—') +
+      statCard(5, 'Max Drawdown', `<span id="vDD"></span>`, 'Compounded · puncak → lembah');
+  }
+
+  if (_freshRender || isInitialBuild) {
+    const set = (id, v, fmt, cls) => {
+      const n = $('#' + id); if (!n) return;
+      if (v == null) { n.textContent = '—'; n._v = 0; return; }
+      if (cls) { n.className = ''; n.classList.add(cls); }
+      tween(n, v, fmt);
+    };
+    set('vTotal', m.total, v => fmtInt(Math.round(v)));
+    set('vWR', m.winRate, v => fmtPct(v, 1));
+    set('vAvg', m.avg, v => fmtPct(v), pcls(m.avg));
+    set('vCum', m.total ? cumVal : null, v => fmtPct(v), pcls(cumVal));
+    set('vBest', best ? tradeRet(best) : null, v => fmtPct(v), best ? pcls(tradeRet(best)) : '');
+    set('vDD', m.total ? m.maxDD : null, v => fmtPct(v), pcls(m.maxDD));
+    _freshRender = false;
+  } else {
+    // Mode stabil: Perbarui angka in-place TANPA animasi tween/muter saat scroll
+    const updateVal = (id, v, fmt, cls) => {
+      const n = $('#' + id); if (!n) return;
+      if (v == null) { n.textContent = '—'; n._v = 0; return; }
+      if (cls) { n.className = ''; n.classList.add(cls); }
+      n.textContent = fmt(v);
+      n._v = v;
+    };
+    updateVal('vTotal', m.total, v => fmtInt(Math.round(v)));
+    updateVal('vWR', m.winRate, v => fmtPct(v, 1));
+    updateVal('vAvg', m.avg, v => fmtPct(v), pcls(m.avg));
+    updateVal('vCum', m.total ? cumVal : null, v => fmtPct(v), pcls(cumVal));
+    updateVal('vBest', best ? tradeRet(best) : null, v => fmtPct(v), best ? pcls(tradeRet(best)) : '');
+    updateVal('vDD', m.total ? m.maxDD : null, v => fmtPct(v), pcls(m.maxDD));
+
+    const cards = box.querySelectorAll('.card.stat');
+    if (cards.length >= 6) {
+      const sub0 = cards[0].querySelector('.stat-sub');
+      if (sub0) sub0.textContent = `${m.wins}W · ${m.losses}L${m.be ? ` · ${m.be} BE` : ''} · ${days} hari aktif`;
+      const barW = cards[1].querySelector('.wl-bar .w'), barL = cards[1].querySelector('.wl-bar .l');
+      if (barW) barW.style.width = `${wrW}%`;
+      if (barL) barL.style.width = `${wrL}%`;
+      const sub4 = cards[4].querySelector('.stat-sub');
+      if (sub4) sub4.textContent = best ? `${esc(best.asset) || '—'} · ${fmtDate(best.date)} · ${best.position}` : '—';
+    }
+  }
 }
 
 function renderDailyChart() {
@@ -1344,7 +1440,7 @@ function renderDailyChart() {
   const le = Math.max(1, Math.ceil(arr.length / Math.max(1, Math.floor(iw / 58))));
   arr.forEach((t, i) => {
     const r = rets[i], cx = pl + band * i + band / 2;
-    const rect = el('rect', { x: cx - bw / 2, width: bw, rx: 2.5, class: 'bar ' + (r > 0 ? 'pos' : r < 0 ? 'neg' : 'be') }, svg);
+    const rect = el('rect', { x: cx - bw / 2, width: bw, rx: 1, class: 'bar ' + (r > 0 ? 'pos' : r < 0 ? 'neg' : 'be') }, svg);
     if (r >= 0) { rect.setAttribute('y', Y(r)); rect.setAttribute('height', Math.max(1.5, y0 - Y(r))) }
     else { rect.setAttribute('y', y0); rect.setAttribute('height', Math.max(1.5, Y(r) - y0)) }
     if (_freshRender) { rect.style.transformOrigin = `${cx}px ${y0}px`; rect.style.animation = `barGrow .5s ${i * 16}ms cubic-bezier(.2,.7,.3,1) both` }
@@ -1377,25 +1473,25 @@ function renderCumChart() {
     el('text', { x: pl - 7, y: Y(v) + 3.5, 'text-anchor': 'end' }, svg).textContent = fmtAxisPct(v)
   });
   el('line', { x1: pl, x2: w - pr, y1: y0, y2: y0, class: 'zero' }, svg);
+  const last = vals[n - 1];
+  const curveColor = last >= 0 ? '#10b981' : '#f43f5e';
   const defs = el('defs', {}, svg);
   const g = el('linearGradient', { id: 'gCum', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-  el('stop', { offset: '0%', 'stop-color': '#e8b84b', 'stop-opacity': .26 }, g);
-  el('stop', { offset: '100%', 'stop-color': '#e8b84b', 'stop-opacity': 0 }, g);
+  el('stop', { offset: '0%', 'stop-color': curveColor, 'stop-opacity': .16 }, g);
+  el('stop', { offset: '100%', 'stop-color': curveColor, 'stop-opacity': 0 }, g);
   let d = `M${X(0)},${Y(vals[0])}`; for (let i = 1; i < n; i++)d += `L${X(i)},${Y(vals[i])}`;
   el('path', { d: `${d}L${X(n - 1)},${y0}L${X(0)},${y0}Z`, fill: 'url(#gCum)' }, svg);
-  const line = el('path', { d, fill: 'none', stroke: 'var(--gold)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+  const line = el('path', { d, fill: 'none', stroke: curveColor, 'stroke-width': 1.75, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
   if (_freshRender && !REDUCED) {
     const len = line.getTotalLength(); line.style.strokeDasharray = len; line.style.strokeDashoffset = len;
     line.getBoundingClientRect(); line.style.transition = 'stroke-dashoffset .8s ease'; line.style.strokeDashoffset = '0'
   }
-  for (let i = 0; i < n; i++)el('circle', { cx: X(i), cy: Y(vals[i]), r: 2.6, fill: '#0a0e15', stroke: 'var(--gold)', 'stroke-width': 1.6 }, svg);
-  const last = vals[n - 1];
-  el('text', { x: X(n - 1) + 8, y: Y(last) + 4, fill: last >= 0 ? 'var(--green)' : 'var(--red)', 'font-weight': '600', 'font-size': '11.5px' }, svg).textContent = fmtPct(last);
+  el('text', { x: X(n - 1) + 8, y: Y(last) + 4, fill: curveColor, 'font-weight': '600', 'font-size': '11.5px' }, svg).textContent = fmtPct(last);
   const le = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(iw / 70))));
   for (let i = 0; i < n; i++)if (i % le === 0 || i === n - 1)
     el('text', { x: X(i), y: h - 7, 'text-anchor': 'middle' }, svg).textContent = labels[i] === 'Mulai' ? 'Mulai' : shortDate(labels[i]);
   const vline = el('line', { y1: ptp, y2: h - pb, class: 'zero', opacity: 0 }, svg);
-  const focus = el('circle', { r: 4.2, fill: 'var(--gold)', opacity: 0 }, svg);
+  const focus = el('circle', { r: 4, fill: curveColor, stroke: '#09090b', 'stroke-width': 1.5, opacity: 0 }, svg);
   const ov = el('rect', { x: pl, y: ptp, width: iw, height: ih, fill: 'transparent' }, svg);
   ov.addEventListener('pointermove', e => {
     const bx = svg.getBoundingClientRect();
@@ -1620,6 +1716,7 @@ async function deleteTrade(id) {
   trades = trades.filter(x => x.id !== id);
   if (state.editingId === id) cancelEdit();
   if (state.expanded === id) state.expanded = null;
+  addDeletedTradeId(currentUser?.email, id);
   saveTrades(); renderAll(); toast('Trade dihapus');
   if (currentUser && !currentUser.isLocalOnly && sbClient) {
     sbClient.from('trades').delete().eq('id', id).then(({ error }) => {
@@ -1650,6 +1747,7 @@ $('#tradeForm').addEventListener('submit', e => {
   if (state.editingId) {
     const t = trades.find(x => x.id === state.editingId);
     Object.assign(t, { date, asset, position: formPos, entry, exit, lot, notes });
+    saveTrades();
     toast('Perubahan trade disimpan');
     if (currentUser && !currentUser.isLocalOnly && sbClient) {
       sbClient.from('trades').update({
@@ -1660,7 +1758,9 @@ $('#tradeForm').addEventListener('submit', e => {
     }
   } else {
     const newTrade = { id: uid(), date, asset, position: formPos, entry, exit, lot, notes, createdAt: Date.now() };
+    removeDeletedTradeId(currentUser?.email, newTrade.id);
     trades.push(newTrade);
+    saveTrades(); // Segera simpan ke localStorage agar tidak hilang saat refresh!
     toast('Trade berhasil dicatat');
     if (currentUser && !currentUser.isLocalOnly && sbClient) {
       sbClient.from('trades').insert([{
@@ -1675,11 +1775,11 @@ $('#tradeForm').addEventListener('submit', e => {
         notes: newTrade.notes,
         created_at: newTrade.createdAt
       }]).then(({ error }) => {
-        if (error) console.error('Cloud insert trade error:', error);
+        if (error) console.warn('Cloud insert trade error (tersimpan lokal):', error);
       });
     }
   }
-  saveTrades(); state.editingId = null; resetForm(); updateFormUI(); renderAll();
+  state.editingId = null; resetForm(); updateFormUI(); renderAll();
 });
 $('#btnCancel').onclick = cancelEdit;
 $('#posSeg').addEventListener('click', e => { const b = e.target.closest('[data-pos]'); if (!b) return; formPos = b.dataset.pos; syncPosSeg(); updatePreview() });
@@ -1773,7 +1873,7 @@ function renderHist() {
     const bh = (b.n / maxN) * ih, cx = pl + band * i + band / 2;
     const mid = (b.lo + b.hi) / 2;
     const rect = el('rect', {
-      x: cx - bwpx / 2, y: ptp + ih - bh, width: bwpx, height: bh, rx: 3,
+      x: cx - bwpx / 2, y: ptp + ih - bh, width: bwpx, height: bh, rx: 1,
       class: 'bar ' + (mid > 0 ? 'pos' : mid < 0 ? 'neg' : 'be')
     }, svg);
     rect.style.transformOrigin = `${cx}px ${ptp + ih}px`;
@@ -1805,11 +1905,11 @@ function renderDDChart() {
   });
   el('line', { x1: pl, x2: w - pr, y1: y0, y2: y0, class: 'zero' }, svg);
   const defs = el('defs', {}, svg), g = el('linearGradient', { id: 'gDD', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-  el('stop', { offset: '0%', 'stop-color': '#f6465d', 'stop-opacity': 0 }, g);
-  el('stop', { offset: '100%', 'stop-color': '#f6465d', 'stop-opacity': .3 }, g);
+  el('stop', { offset: '0%', 'stop-color': '#f43f5e', 'stop-opacity': 0 }, g);
+  el('stop', { offset: '100%', 'stop-color': '#f43f5e', 'stop-opacity': .2 }, g);
   let d = `M${X(0)},${Y(dd[0])}`; for (let i = 1; i < n; i++)d += `L${X(i)},${Y(dd[i])}`;
   el('path', { d: `${d}L${X(n - 1)},${y0}L${X(0)},${y0}Z`, fill: 'url(#gDD)' }, svg);
-  el('path', { d, fill: 'none', stroke: 'var(--red)', 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
+  el('path', { d, fill: 'none', stroke: 'var(--red)', 'stroke-width': 1.75, 'stroke-linejoin': 'round' }, svg);
   let mi = 0; dd.forEach((v, i) => { if (v < dd[mi]) mi = i });
   el('circle', { cx: X(mi), cy: Y(dd[mi]), r: 3.6, fill: 'var(--red)' }, svg);
   el('text', { x: X(mi) + 7, y: Y(dd[mi]) + 4, fill: 'var(--red)', 'font-size': '11px', 'font-weight': '600' }, svg).textContent = fmtPct(dd[mi]);
@@ -2262,6 +2362,7 @@ $('#btnClearAll').onclick = async () => {
     ok: 'Ya, Hapus Semua'
   });
   if (!ok) return;
+  trades.forEach(t => addDeletedTradeId(currentUser?.email, t.id));
   trades = [];
   saveTrades();
   cancelEdit();
@@ -2310,6 +2411,7 @@ function renderAll() {
   });
 }
 function go(page) {
+  if (state.page === page) return; // Jangan re-render jika sudah di halaman yang sama (mencegah animasi berulang saat sentuh nav di HP)
   state.page = page;
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
   $$('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
@@ -2343,7 +2445,9 @@ document.addEventListener('click', e => {
     syncCumSeg();
     if (state.page === 'overview') {
       const arr = pt(), m = metrics(arr);
+      _freshRender = true;
       renderStatCards(m, arr);
+      _freshRender = false;
       renderCumChart();
     } else {
       renderCumChart();
@@ -2386,19 +2490,19 @@ tickClock(); setInterval(tickClock, 1000);
 
 let lastInnerWidth = window.innerWidth;
 window.addEventListener('resize', debounce(() => {
-  // Abaikan event resize jika lebar layar tidak berubah (misal: saat scroll di HP yang menyebabkan address bar muncul/hilang)
-  if (window.innerWidth === lastInnerWidth) return;
+  // Abaikan event resize jika perubahan lebar layar kurang dari 20px (misal: saat scroll di HP yang menyebabkan address bar muncul/hilang atau scrollbar toggle)
+  if (Math.abs(window.innerWidth - lastInnerWidth) < 20) return;
   lastInnerWidth = window.innerWidth;
 
   if (state.page === 'overview') {
-    // Cukup render ulang grafik SVG yang responsif terhadap lebar layar tanpa mengulang animasi kartu KPI
+    // Cukup render ulang grafik SVG yang responsif terhadap lebar layar tanpa menyentuh kartu KPI
     renderDailyChart();
     renderCumChart();
     syncRecentHeight();
   }
   else if (state.page === 'journal') syncJournalHeight();
   else if (state.page === 'analytics') renderAnalytics();
-}, 200));
+}, 250));
 
 /* ---- init ---- */
 $('#fDate').value = todayISO();
@@ -2411,15 +2515,18 @@ syncPeriodSeg(); syncCumSeg(); syncPosSeg(); updatePreview(); updateFormUI();
 renderAll();
 
 if ($('#btnAuth')) $('#btnAuth').onclick = openAuthModal;
-if ($('#btnApplyUpdate')) {
-  $('#btnApplyUpdate').onclick = async () => {
-    const b = $('#btnApplyUpdate');
-    b.disabled = true;
-    b.textContent = 'Memperbarui...';
-    await syncFromCloud(true);
-    b.disabled = false;
-    b.textContent = 'Muat Ulang Data ↻';
-    hideUpdateBanner();
+const btnApply = $('#btnApplyUpdate');
+if (btnApply) {
+  btnApply.onclick = async function () {
+    btnApply.disabled = true;
+    btnApply.textContent = 'Memperbarui...';
+    try {
+      await syncFromCloud(true);
+    } finally {
+      btnApply.disabled = false;
+      btnApply.textContent = 'Muat Ulang Data ↻';
+      hideUpdateBanner();
+    }
   };
 }
 if ($('#btnCloseUpdateBanner')) {
