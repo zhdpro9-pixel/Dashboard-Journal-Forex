@@ -162,6 +162,131 @@ function saveTrades() {
 }
 function loadSettings() { try { const s = JSON.parse(localStorage.getItem(LS_SET) || '{}'); if (s.period) state.period = s.period; if (s.cumMethod) state.cumMethod = s.cumMethod } catch (e) { } }
 function saveSettings() { try { localStorage.setItem(LS_SET, JSON.stringify({ period: state.period, cumMethod: state.cumMethod })) } catch (e) { } }
+
+/* ================= CAPITAL & EQUITY TRACKING (OPSI B) ================= */
+const LS_CAP_FALLBACK = 'tjd.capital.v1';
+function getUserCapitalKey() {
+  if (currentUser && currentUser.email) {
+    return 'tjd.capital.u.' + currentUser.email.toLowerCase();
+  }
+  try {
+    const active = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
+    if (active && active.email) return 'tjd.capital.u.' + active.email.toLowerCase();
+  } catch (_) {}
+  return LS_CAP_FALLBACK;
+}
+function loadCapitalConfig() {
+  try {
+    const key = getUserCapitalKey();
+    let raw = localStorage.getItem(key);
+    if (!raw && key !== LS_CAP_FALLBACK) {
+      raw = localStorage.getItem(LS_CAP_FALLBACK);
+    }
+    const parsed = JSON.parse(raw || 'null');
+    if (parsed && typeof parsed === 'object') {
+      return {
+        initialBalance: isFinite(Number(parsed.initialBalance)) && Number(parsed.initialBalance) >= 0 ? Number(parsed.initialBalance) : 1000,
+        autoSyncPs: parsed.autoSyncPs !== false,
+        flows: Array.isArray(parsed.flows) ? parsed.flows.filter(f => f && f.amount > 0 && f.date) : [],
+        updatedAt: Number(parsed.updatedAt || 0)
+      };
+    }
+  } catch (_) {}
+  return { initialBalance: 1000, autoSyncPs: true, flows: [], updatedAt: 0 };
+}
+let capitalConfig = loadCapitalConfig();
+
+async function syncCapitalToCloud() {
+  if (!sbClient || !currentUser || currentUser.isLocalOnly) return;
+  try {
+    await ensureCloudSession();
+    await sbClient.auth.updateUser({ data: { capital_config: capitalConfig } });
+  } catch (e) {
+    console.warn('Cloud sync capital error:', e);
+  }
+}
+
+function saveCapitalConfig(syncCloud = true) {
+  capitalConfig.updatedAt = Date.now();
+  try {
+    localStorage.setItem(getUserCapitalKey(), JSON.stringify(capitalConfig));
+  } catch (_) {}
+  if (syncCloud) syncCapitalToCloud();
+}
+
+function calcAccountEquity() {
+  const cap = capitalConfig || loadCapitalConfig();
+  const initBal = Math.max(0, Number(cap.initialBalance) || 0);
+  let runningBalance = initBal;
+  let totalDeposit = 0;
+  let totalWithdraw = 0;
+  let tradingProfitUsd = 0;
+  let twrFactor = 1.0;
+  const tradePnlMap = new Map();
+
+  // Gabungkan event mutasi modal & trade secara kronologis berdasarkan tanggal
+  const events = [];
+  (cap.flows || []).forEach(f => {
+    const amt = Number(f.amount) || 0;
+    if (amt > 0 && f.date) {
+      events.push({
+        kind: 'flow',
+        date: f.date,
+        order: 0, // Mutasi modal di tanggal yang sama dihitung sebelum trade hari itu
+        createdAt: Number(f.createdAt || 0),
+        flow: f
+      });
+    }
+  });
+  sorted().forEach(t => {
+    events.push({
+      kind: 'trade',
+      date: t.date || '',
+      order: 1,
+      createdAt: Number(t.createdAt || 0),
+      trade: t
+    });
+  });
+
+  events.sort((a, b) =>
+    (a.date || '').localeCompare(b.date || '') ||
+    (a.order - b.order) ||
+    (a.createdAt - b.createdAt)
+  );
+
+  events.forEach(ev => {
+    if (ev.kind === 'flow') {
+      const amt = Number(ev.flow.amount) || 0;
+      if (ev.flow.type === 'withdraw') {
+        runningBalance = Math.max(0, runningBalance - amt);
+        totalWithdraw += amt;
+      } else {
+        runningBalance += amt;
+        totalDeposit += amt;
+      }
+    } else if (ev.kind === 'trade') {
+      const t = ev.trade;
+      const retPct = tradeRet(t);
+      const pnlUsd = runningBalance * (retPct / 100);
+      runningBalance = Math.max(0, runningBalance + pnlUsd);
+      tradingProfitUsd += pnlUsd;
+      twrFactor *= (1 + retPct / 100);
+      tradePnlMap.set(String(t.id), { pnlUsd, eqAfter: runningBalance, retPct });
+    }
+  });
+
+  return {
+    initialBalance: initBal,
+    totalDeposit,
+    totalWithdraw,
+    netInjected: initBal + totalDeposit - totalWithdraw,
+    tradingProfitUsd,
+    currentBalance: runningBalance,
+    growthPct: (twrFactor - 1) * 100,
+    flowsCount: (cap.flows || []).length,
+    tradePnlMap
+  };
+}
 const LS_CUSTOM = 'tjd.custom_pairs.v1';
 function loadCustomPairs() { try { return JSON.parse(localStorage.getItem(LS_CUSTOM) || '[]') } catch (e) { return [] } }
 function saveCustomPairs(list) { localStorage.setItem(LS_CUSTOM, JSON.stringify(list)) }
@@ -646,7 +771,7 @@ async function syncFromCloud(showFeedback = false) {
     const prevHash = computeTradesHash(trades);
     const prevCount = trades.length;
 
-    // 0. Sinkronkan daftar deleted_trades terbaru dari user_metadata jika ada
+    // 0. Sinkronkan daftar deleted_trades & capital_config terbaru dari user_metadata jika ada
     try {
       const { data: uData } = await sbClient.auth.getUser();
       const cloudDeleted = uData?.user?.user_metadata?.deleted_trades;
@@ -654,6 +779,21 @@ async function syncFromCloud(showFeedback = false) {
         const s = getDeletedTradeIds(emailKey);
         cloudDeleted.forEach(id => s.add(String(id)));
         saveDeletedTradeIds(emailKey, s);
+      }
+      const cloudCap = uData?.user?.user_metadata?.capital_config;
+      if (cloudCap && typeof cloudCap === 'object') {
+        const localCap = loadCapitalConfig();
+        if (Number(cloudCap.updatedAt || 0) > Number(localCap.updatedAt || 0)) {
+          capitalConfig = {
+            initialBalance: isFinite(Number(cloudCap.initialBalance)) ? Number(cloudCap.initialBalance) : 1000,
+            autoSyncPs: cloudCap.autoSyncPs !== false,
+            flows: Array.isArray(cloudCap.flows) ? cloudCap.flows : [],
+            updatedAt: Number(cloudCap.updatedAt || Date.now())
+          };
+          try { localStorage.setItem(getUserCapitalKey(), JSON.stringify(capitalConfig)); } catch (_) {}
+        } else if (Number(localCap.updatedAt || 0) > Number(cloudCap.updatedAt || 0)) {
+          syncCapitalToCloud();
+        }
       }
     } catch (_) {}
 
@@ -801,6 +941,7 @@ function unlockGate() {
     gate.classList.remove('unlocking');
     gate.innerHTML = '';
     trades = loadTrades();
+    capitalConfig = loadCapitalConfig();
     renderAll();
     syncFromCloud();
     subscribeRealtime();
@@ -1691,7 +1832,271 @@ function renderCalDetail() {
   box.innerHTML = html;
 }
 
+function syncEquityToPs() {
+  const eq = calcAccountEquity();
+  const roundedEq = Math.max(0, Math.round(eq.currentBalance * 100) / 100);
+  const btnUse = $('#btnPsUseAccountBal');
+  if (btnUse) {
+    btnUse.textContent = `⚡ Saldo Akun (${fmtUsd(roundedEq)})`;
+  }
+  const chipEq = $('#psChipEquity');
+  if (chipEq) {
+    chipEq.dataset.bal = String(roundedEq);
+    chipEq.textContent = `⚡ Saldo (${fmtUsd(roundedEq, 0)})`;
+  }
+  if (capitalConfig.autoSyncPs !== false && roundedEq > 0) {
+    psState.balance = roundedEq;
+    const balInp = $('#psBalance');
+    if (balInp && document.activeElement !== balInp) {
+      balInp.value = roundedEq;
+    }
+    savePsSettings();
+  }
+  return eq;
+}
+
+function renderEquityStrip() {
+  const box = $('#equityStrip');
+  if (!box) return;
+  const eq = syncEquityToPs();
+  const pnlCls = eq.tradingProfitUsd > 1e-6 ? 'pos' : eq.tradingProfitUsd < -1e-6 ? 'neg' : 'be';
+  const grCls = eq.growthPct > 1e-6 ? 'pos' : eq.growthPct < -1e-6 ? 'neg' : 'be';
+  const pnlSign = eq.tradingProfitUsd > 1e-6 ? '+' : eq.tradingProfitUsd < -1e-6 ? '-' : '';
+  const grArrow = eq.growthPct > 1e-6 ? '▲ ' : eq.growthPct < -1e-6 ? '▼ ' : '';
+
+  const flowParts = [`Modal Awal: <b>${fmtUsd(eq.initialBalance)}</b>`];
+  if (eq.totalDeposit > 0) flowParts.push(`Top-Up: <b class="pos">+${fmtUsd(eq.totalDeposit)}</b>`);
+  if (eq.totalWithdraw > 0) flowParts.push(`Withdraw: <b class="neg">-${fmtUsd(eq.totalWithdraw)}</b>`);
+
+  box.innerHTML = `
+    <div class="eq-strip-grid">
+      <div class="eq-item eq-main">
+        <div class="eq-label">SALDO SAAT INI (SISA MODAL)</div>
+        <div class="eq-val mono">${fmtUsd(eq.currentBalance)}</div>
+        <div class="eq-sub">${flowParts.join(' · ')}</div>
+      </div>
+      <div class="eq-item">
+        <div class="eq-label">PROFIT / LOSS TRADING ($)</div>
+        <div class="eq-val mono ${pnlCls}">${pnlSign}${fmtUsd(Math.abs(eq.tradingProfitUsd))}</div>
+        <div class="eq-sub">Murni dari ${trades.length} trade · Opsi B (Compounded)</div>
+      </div>
+      <div class="eq-item">
+        <div class="eq-label">GROWTH MODAL (%)</div>
+        <div class="eq-val mono ${grCls}">${grArrow}${fmtPct(eq.growthPct)}</div>
+        <div class="eq-sub">Total Modal Bersih: <b class="mono">${fmtUsd(eq.netInjected)}</b></div>
+      </div>
+      <div class="eq-actions">
+        <button type="button" class="btn sm primary" id="btnManageCapital">⚙ Kelola &amp; Tambah Modal</button>
+      </div>
+    </div>
+  `;
+  const btn = $('#btnManageCapital');
+  if (btn) btn.onclick = () => openCapitalModal();
+}
+
+function openCapitalModal() {
+  const root = $('#modalRoot');
+  let flowMode = 'deposit';
+
+  const renderModalContent = () => {
+    const eq = calcAccountEquity();
+    const flows = [...(capitalConfig.flows || [])].sort((a, b) =>
+      (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0)
+    );
+
+    root.innerHTML = `<div class="overlay">
+      <div class="modal cap-modal">
+        <div class="cap-modal-head">
+          <div>
+            <h3>Kelola Modal &amp; Mutasi Dana</h3>
+            <p class="mmsg" style="margin:2px 0 0">Atur modal awal, catat tambah modal (Top-Up) atau penarikan (Withdraw). Growth (%) dihitung proporsional tanpa terdistorsi Top-Up.</p>
+          </div>
+          <button type="button" class="sync-banner-close" id="capCloseTop" title="Tutup">✕</button>
+        </div>
+
+        <div class="cap-summary-bar">
+          <div>
+            <span class="cap-sum-l">Saldo Saat Ini</span>
+            <b class="cap-sum-v mono">${fmtUsd(eq.currentBalance)}</b>
+          </div>
+          <div>
+            <span class="cap-sum-l">Modal Bersih</span>
+            <b class="cap-sum-v mono">${fmtUsd(eq.netInjected)}</b>
+          </div>
+          <div>
+            <span class="cap-sum-l">Net Profit Trading</span>
+            <b class="cap-sum-v mono ${pcls(eq.tradingProfitUsd)}">${eq.tradingProfitUsd >= 0 ? '+' : '-'}${fmtUsd(Math.abs(eq.tradingProfitUsd))} (${fmtPct(eq.growthPct)})</b>
+          </div>
+        </div>
+
+        <div class="cap-section">
+          <div class="ps-label-row">
+            <label for="capInitInput">1. Modal Awal Akun (Initial Balance $)</label>
+            <span class="mono dim" style="font-size:11px">USD ($)</span>
+          </div>
+          <div class="cap-init-row">
+            <input type="number" id="capInitInput" step="any" min="0" value="${capitalConfig.initialBalance}" placeholder="1000" inputmode="decimal">
+            <button type="button" class="btn sm primary" id="btnSaveInitCap">Simpan Modal Awal</button>
+          </div>
+          <div class="ps-presets" id="capInitPresets" style="margin-top:6px">
+            <button type="button" class="ps-chip" data-ibal="100">$100</button>
+            <button type="button" class="ps-chip" data-ibal="500">$500</button>
+            <button type="button" class="ps-chip" data-ibal="1000">$1,000</button>
+            <button type="button" class="ps-chip" data-ibal="5000">$5,000</button>
+            <button type="button" class="ps-chip" data-ibal="10000">$10,000</button>
+          </div>
+        </div>
+
+        <div class="cap-section">
+          <label style="display:block;margin-bottom:6px">2. Catat Tambah Modal (Top-Up) / Tarik Dana (Withdraw)</label>
+          <div class="pos-seg" id="capFlowTypeSeg" style="margin-bottom:10px">
+            <button type="button" data-ft="deposit" class="${flowMode === 'deposit' ? 'on' : ''}" data-pos="LONG">+ Tambah Modal (Top-Up)</button>
+            <button type="button" data-ft="withdraw" class="${flowMode === 'withdraw' ? 'on' : ''}" data-pos="SHORT">− Tarik Dana (Withdraw)</button>
+          </div>
+          <div class="cap-flow-grid">
+            <div>
+              <label for="capFlowDate" style="font-size:10px;color:var(--dim);display:block;margin-bottom:4px">TANGGAL</label>
+              <input type="date" id="capFlowDate" value="${todayISO()}">
+            </div>
+            <div>
+              <label for="capFlowAmt" style="font-size:10px;color:var(--dim);display:block;margin-bottom:4px">NOMINAL ($)</label>
+              <input type="number" id="capFlowAmt" step="any" min="0.01" placeholder="Contoh: 500" inputmode="decimal">
+            </div>
+            <div class="cap-flow-note">
+              <label for="capFlowNote" style="font-size:10px;color:var(--dim);display:block;margin-bottom:4px">CATATAN (OPSIONAL)</label>
+              <input type="text" id="capFlowNote" placeholder="Contoh: Top-up modal bulanan / Tarik profit">
+            </div>
+          </div>
+          <button type="button" class="btn sm primary" id="btnAddCapFlow" style="width:100%;justify-content:center;margin-top:10px;height:36px">
+            ${flowMode === 'deposit' ? '+ Tambahkan Top-Up Modal' : '− Catat Penarikan Dana (Withdraw)'}
+          </button>
+        </div>
+
+        <div class="cap-section">
+          <div class="ps-label-row" style="margin-bottom:6px">
+            <label>3. Riwayat Mutasi Modal (${flows.length})</label>
+          </div>
+          <div class="cap-flow-list" id="capFlowList">
+            ${flows.length ? flows.map(f => `
+              <div class="cap-flow-row">
+                <div class="cfr-left">
+                  <span class="badge ${f.type === 'withdraw' ? 'loss' : 'win'}">${f.type === 'withdraw' ? '− WITHDRAW' : '+ TOP-UP'}</span>
+                  <span class="mono cfr-date">${fmtDate(f.date)}</span>
+                  <span class="cfr-note">${f.note ? esc(f.note) : '<span class="dim">Tanpa catatan</span>'}</span>
+                </div>
+                <div class="cfr-right">
+                  <b class="mono ${f.type === 'withdraw' ? 'neg' : 'pos'}">${f.type === 'withdraw' ? '-' : '+'}${fmtUsd(f.amount)}</b>
+                  <button type="button" class="cfr-del" data-del-flow="${f.id}" title="Hapus mutasi ini">✕</button>
+                </div>
+              </div>
+            `).join('') : '<div class="dim" style="font-size:12px;padding:10px;text-align:center;border:1px dashed var(--line2);border-radius:4px">Belum ada riwayat Top-Up atau Withdraw tambahan.</div>'}
+          </div>
+        </div>
+
+        <label class="cap-sync-toggle">
+          <input type="checkbox" id="capAutoSyncChk" ${capitalConfig.autoSyncPs !== false ? 'checked' : ''}>
+          <span>Otomatis hubungkan <b>Saldo Saat Ini (${fmtUsd(eq.currentBalance)})</b> ke kalkulator <b>Position Sizing</b></span>
+        </label>
+
+        <div class="mact" style="margin-top:14px">
+          <button type="button" class="btn primary" id="capCloseBtn" style="width:100%;justify-content:center">Selesai</button>
+        </div>
+      </div>
+    </div>`;
+
+    const close = () => {
+      root.innerHTML = '';
+      document.removeEventListener('keydown', escHandler);
+    };
+    const escHandler = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', escHandler);
+
+    $('#capCloseTop').onclick = close;
+    $('#capCloseBtn').onclick = close;
+    root.querySelector('.overlay').addEventListener('click', e => {
+      if (e.target.classList.contains('overlay')) close();
+    });
+
+    $('#btnSaveInitCap').onclick = () => {
+      const val = parseFloat($('#capInitInput').value);
+      if (!isFinite(val) || val < 0) {
+        toast('Masukkan nominal modal awal yang valid', 'err');
+        return;
+      }
+      capitalConfig.initialBalance = val;
+      saveCapitalConfig();
+      renderAll();
+      renderModalContent();
+      toast(`Modal awal diperbarui menjadi ${fmtUsd(val)}`);
+    };
+
+    $('#capInitPresets').addEventListener('click', e => {
+      const b = e.target.closest('[data-ibal]');
+      if (!b) return;
+      const val = parseFloat(b.dataset.ibal);
+      capitalConfig.initialBalance = val;
+      saveCapitalConfig();
+      renderAll();
+      renderModalContent();
+      toast(`Modal awal diatur ke ${fmtUsd(val)}`);
+    });
+
+    $('#capFlowTypeSeg').addEventListener('click', e => {
+      const b = e.target.closest('[data-ft]');
+      if (!b) return;
+      flowMode = b.dataset.ft;
+      $$('#capFlowTypeSeg button').forEach(btn => btn.classList.toggle('on', btn.dataset.ft === flowMode));
+      $('#btnAddCapFlow').textContent = flowMode === 'deposit' ? '+ Tambahkan Top-Up Modal' : '− Catat Penarikan Dana (Withdraw)';
+    });
+
+    $('#btnAddCapFlow').onclick = () => {
+      const date = $('#capFlowDate').value || todayISO();
+      const amount = parseFloat($('#capFlowAmt').value);
+      const note = ($('#capFlowNote').value || '').trim();
+      if (!isFinite(amount) || amount <= 0) {
+        toast('Masukkan nominal dolar ($) lebih dari 0', 'err');
+        $('#capFlowAmt').focus();
+        return;
+      }
+      if (!Array.isArray(capitalConfig.flows)) capitalConfig.flows = [];
+      capitalConfig.flows.push({
+        id: uid(),
+        date,
+        type: flowMode,
+        amount,
+        note,
+        createdAt: Date.now()
+      });
+      saveCapitalConfig();
+      renderAll();
+      renderModalContent();
+      toast(flowMode === 'deposit' ? `Top-Up +${fmtUsd(amount)} berhasil dicatat` : `Withdraw -${fmtUsd(amount)} berhasil dicatat`);
+    };
+
+    $('#capFlowList').addEventListener('click', e => {
+      const delBtn = e.target.closest('[data-del-flow]');
+      if (!delBtn) return;
+      const id = delBtn.dataset.delFlow;
+      capitalConfig.flows = (capitalConfig.flows || []).filter(f => String(f.id) !== String(id));
+      saveCapitalConfig();
+      renderAll();
+      renderModalContent();
+      toast('Riwayat mutasi modal dihapus');
+    });
+
+    $('#capAutoSyncChk').addEventListener('change', e => {
+      capitalConfig.autoSyncPs = e.target.checked;
+      saveCapitalConfig();
+      renderAll();
+      toast(capitalConfig.autoSyncPs ? 'Sinkronisasi otomatis ke Position Sizing aktif' : 'Sinkronisasi otomatis ke Position Sizing dimatikan');
+    });
+  };
+
+  renderModalContent();
+}
+
 function renderOverview() {
+  renderEquityStrip();
   const has = trades.length > 0;
   $('#ovEmpty').hidden = has; $('#ovBody').hidden = !has;
   if (!has) return;
@@ -1707,16 +2112,72 @@ function filteredJournal() {
   return sorted().filter(t => (!q || (t.asset || '').toLowerCase().includes(q)) && (pos === 'ALL' || t.position === pos) && (!from || t.date >= from) && (!to || t.date <= to)).reverse()
 }
 
+function syncJournalDateFilterUI(matchCount) {
+  const fromEl = $('#tFrom'), toEl = $('#tTo');
+  const fromWrap = $('#tFromWrap'), toWrap = $('#tToWrap');
+  const fromLbl = $('#tFromLabel'), toLbl = $('#tToLabel');
+  const banner = $('#tRangeBanner');
+  if (!fromEl || !toEl) return;
+
+  const f = fromEl.value || state.j.from || '';
+  const t = toEl.value || state.j.to || '';
+  toEl.min = f || '';
+  fromEl.max = t || '';
+
+  if (fromWrap && fromLbl) {
+    fromWrap.classList.toggle('active', !!f);
+    fromWrap.classList.toggle('in-range', !!(f && t));
+    fromLbl.innerHTML = f
+      ? `<span class="df-tag">Mulai</span><b class="df-val">${fmtDate(f)}</b>`
+      : `📅 Tanggal Dimulai`;
+  }
+  if (toWrap && toLbl) {
+    toWrap.classList.toggle('active', !!t);
+    toWrap.classList.toggle('in-range', !!(f && t));
+    toLbl.innerHTML = t
+      ? `<span class="df-tag">Akhir</span><b class="df-val">${fmtDate(t)}</b>`
+      : `📅 Tanggal Berakhir`;
+  }
+  if (banner) {
+    if (f || t) {
+      banner.hidden = false;
+      const startTxt = f ? `<b>${fmtDate(f)}</b>` : `<span class="dim">Awal</span>`;
+      const endTxt = t ? `<b>${fmtDate(t)}</b>` : `<span class="dim">Sekarang</span>`;
+      let daysSpan = '';
+      if (f && t && t >= f) {
+        const dCount = Math.round((parseISO(t) - parseISO(f)) / 864e5) + 1;
+        daysSpan = ` · ${dCount} hari`;
+      }
+      banner.innerHTML = `
+        <div class="drb-left">
+          <span class="drb-dot"></span>
+          <span class="drb-label">Rentang Tanggal:</span>
+          <span class="drb-dates">${startTxt} <span class="drb-arr">→</span> ${endTxt}</span>
+          <span class="drb-badge">${matchCount} trade${daysSpan}</span>
+        </div>
+        <button type="button" class="drb-clear" id="btnClearDateRange" title="Hapus rentang tanggal">✕ Reset Rentang</button>
+      `;
+    } else {
+      banner.hidden = true;
+      banner.innerHTML = '';
+    }
+  }
+}
+
 function renderTable() {
   const rows = filteredJournal(), tb = $('#tbody');
+  const hasDateRange = !!(state.j.from || state.j.to);
+  const eq = calcAccountEquity();
+  syncJournalDateFilterUI(rows.length);
   $('#tblCount').textContent = `Menampilkan ${rows.length} dari ${trades.length} trade`;
   if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:34px">${trades.length ? 'Tidak ada trade yang cocok dengan filter.' : 'Belum ada trade — catat trade pertamamu melalui formulir di samping.'}</td></tr>`; return }
   tb.innerHTML = rows.map(t => {
     const r = tradeRet(t), c = pcls(r);
     const res = r > 0 ? ['win', 'PROFIT'] : r < 0 ? ['loss', 'LOSS'] : ['bee', 'BE'];
     const ex = state.expanded === t.id;
+    const pInfo = eq.tradePnlMap.get(String(t.id));
     let html = `<tr class="trow ${c}${ex ? ' open' : ''}" data-id="${t.id}">
-      <td class="mono">${fmtDate(t.date)}</td>
+      <td class="mono${hasDateRange ? ' date-range-hit' : ''}">${fmtDate(t.date)}</td>
       <td>${esc(t.asset) || '<span class="dim">—</span>'}</td>
       <td><span class="badge ${t.position.toLowerCase()}">${t.position === 'LONG' ? '▲' : '▼'} ${t.position}</span></td>
       <td class="mono r">${t.lot != null ? Number(t.lot).toFixed(2) : '<span class="dim">—</span>'}</td>
@@ -1727,10 +2188,11 @@ function renderTable() {
       <td class="notes-cell" title="${esc(t.notes || '')}">${t.notes ? esc(trunc(t.notes, 32)) : '<span class="dim">—</span>'} <span class="chev">${ex ? '▴' : '▾'}</span></td></tr>`;
     if (ex) {
       const mv = t.position === 'LONG' ? (t.exit - t.entry) : (t.entry - t.exit);
+      const pnlStr = pInfo ? `${pInfo.pnlUsd >= 0 ? '+' : '-'}${fmtUsd(Math.abs(pInfo.pnlUsd))} (Saldo: ${fmtUsd(pInfo.eqAfter)})` : '—';
       html += `<tr class="trow-detail"><td colspan="9"><div class="detail-grid">
         <div><label>Catatan / Trading Journal</label><p>${t.notes ? esc(t.notes) : '<span class="dim">Tidak ada catatan.</span>'}</p></div>
         <div><label>Pergerakan Harga</label><p class="mono">${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}<br><span class="${c}">${mv >= 0 ? '+' : ''}${fmtPrice(Math.abs(mv)).replace(/^/, '')} ${mv >= 0 ? '▲' : '▼'}</span></p></div>
-        <div><label>Lot</label><p class="mono">${t.lot != null ? Number(t.lot).toFixed(2) : '<span class="dim">—</span>'}</p></div>
+        <div><label>Lot &amp; Dampak Modal (Opsi B)</label><p class="mono">${t.lot != null ? Number(t.lot).toFixed(2) + ' Lot' : '—'}<br><span class="${c}">${pnlStr}</span></p></div>
       </div>
       <div class="detail-actions"><button class="btn sm" data-act="edit" data-id="${t.id}">✎ Edit</button><button class="btn sm danger" data-act="del" data-id="${t.id}">Hapus</button></div></td></tr>`
     }
@@ -1915,12 +2377,46 @@ $('#fAsset').addEventListener('change', e => {
 /* ---- filter tabel ---- */
 $('#tSearch').addEventListener('input', e => { state.j.q = e.target.value.trim().toLowerCase(); renderTable() });
 $('#tPos').addEventListener('change', e => { state.j.pos = e.target.value; renderTable() });
-$('#tFrom').addEventListener('change', e => { state.j.from = e.target.value; renderTable() });
-$('#tTo').addEventListener('change', e => { state.j.to = e.target.value; renderTable() });
+['tFrom', 'tTo'].forEach(id => {
+  const el = $('#' + id);
+  if (!el) return;
+  el.addEventListener('click', () => {
+    if (typeof el.showPicker === 'function') {
+      try { el.showPicker(); } catch (_) {}
+    }
+  });
+});
+$('#tFrom').addEventListener('change', e => {
+  state.j.from = e.target.value;
+  if (state.j.from && state.j.to && state.j.to < state.j.from) {
+    state.j.to = state.j.from;
+    $('#tTo').value = state.j.to;
+  }
+  renderTable();
+});
+$('#tTo').addEventListener('change', e => {
+  state.j.to = e.target.value;
+  if (state.j.from && state.j.to && state.j.to < state.j.from) {
+    state.j.from = state.j.to;
+    $('#tFrom').value = state.j.from;
+  }
+  renderTable();
+});
 $('#btnTReset').onclick = () => {
   state.j = { q: '', pos: 'ALL', from: '', to: '' };
   $('#tSearch').value = ''; $('#tPos').value = 'ALL'; $('#tFrom').value = ''; $('#tTo').value = ''; renderTable()
 };
+if ($('#tRangeBanner')) {
+  $('#tRangeBanner').addEventListener('click', e => {
+    if (e.target.closest('#btnClearDateRange')) {
+      state.j.from = '';
+      state.j.to = '';
+      $('#tFrom').value = '';
+      $('#tTo').value = '';
+      renderTable();
+    }
+  });
+}
 
 /* ---- CSV ---- */
 function exportCSV(list, name) {
@@ -2050,7 +2546,10 @@ function renderMonthly(arr) {
   const map = new Map();
   arr.forEach(t => { const k = t.date.slice(0, 7); if (!map.has(k)) map.set(k, []); map.get(k).push(t) });
   const rows = [...map.entries()].sort((a, b) => a[0] < b[0] ? 1 : -1).map(([k, ts]) => {
-    const m = metrics(ts), lab = `${MONTHS_FULL[+k.slice(5, 7) - 1]} ${k.slice(0, 4)}`;
+    const m = metrics(ts);
+    const mIdx = +k.slice(5, 7) - 1;
+    const yr = k.slice(0, 4);
+    const lab = `<span class="m-full">${MONTHS_FULL[mIdx]}</span><span class="m-short">${MONTHS[mIdx]}</span> ${yr}`;
     return `<tr><td class="mono">${lab}</td><td class="mono c">${m.total}</td>
       <td class="mono c">${fmtPct(m.winRate, 1)}</td><td class="mono c ${pcls(m.avg)}">${fmtPct(m.avg)}</td>
       <td class="mono c ${pcls(m.comp)}">${fmtPct(m.comp)}</td></tr>`
@@ -2364,13 +2863,34 @@ $('#psPair').addEventListener('change', e => {
   }
   savePsSettings(); renderPositionSizing();
 });
+if ($('#btnPsUseAccountBal')) {
+  $('#btnPsUseAccountBal').onclick = () => {
+    const eq = calcAccountEquity();
+    const roundedEq = Math.max(0, Math.round(eq.currentBalance * 100) / 100);
+    psState.balance = roundedEq;
+    $('#psBalance').value = roundedEq;
+    capitalConfig.autoSyncPs = true;
+    saveCapitalConfig();
+    savePsSettings();
+    renderPositionSizing();
+    openCapitalModal();
+  };
+}
 $('#psBalance').addEventListener('input', e => {
   psState.balance = parseFloat(e.target.value) || 0;
   savePsSettings(); renderPositionSizing();
 });
 $('#psBalPresets').addEventListener('click', e => {
   const b = e.target.closest('[data-bal]'); if (!b) return;
-  psState.balance = parseFloat(b.dataset.bal);
+  if (b.id === 'psChipEquity') {
+    const eq = calcAccountEquity();
+    psState.balance = Math.max(0, Math.round(eq.currentBalance * 100) / 100);
+    capitalConfig.autoSyncPs = true;
+    saveCapitalConfig();
+    toast(`Saldo akun saat ini (${fmtUsd(psState.balance)}) digunakan`);
+  } else {
+    psState.balance = parseFloat(b.dataset.bal);
+  }
   $('#psBalance').value = psState.balance;
   savePsSettings(); renderPositionSizing();
 });
@@ -2513,6 +3033,7 @@ function renderSidebar() {
   $('#navCount').textContent = trades.length;
 }
 function renderAll() {
+  syncEquityToPs();
   renderSidebar(); setPageMeta(); renderTable();
   if (state.page === 'overview') renderOverview();
   else if (state.page === 'sizing') renderPositionSizing();
