@@ -1744,36 +1744,18 @@ function renderRecent() {
   requestAnimationFrame(syncRecentHeight);
 }
 
+// Tinggi kartu kini diatur sepenuhnya oleh CSS Grid (align-items: stretch) + flex column.
+// Fungsi ini hanya membersihkan sisa inline style lama agar tidak bentrok dengan layout CSS native.
 function syncRecentHeight() {
-  const calCard = $('#calCard'), recentCard = $('#recentCard'), box = $('#recentList');
-  if (!calCard || !recentCard || !box) return;
-  if (window.innerWidth <= 1120) {
-    recentCard.style.height = 'auto';
-    box.style.maxHeight = window.innerWidth <= 640 ? '340px' : '380px';
-    return;
-  }
-  const calH = calCard.offsetHeight;
-  recentCard.style.height = calH + 'px';
-  const headH = recentCard.querySelector('.card-h')?.offsetHeight || 50;
-  const targetMax = Math.max(160, calH - headH - 28);
-  box.style.maxHeight = targetMax + 'px';
+  const recentCard = $('#recentCard'), box = $('#recentList');
+  if (recentCard) recentCard.style.height = '';
+  if (box) box.style.maxHeight = '';
 }
 
 function syncJournalHeight() {
-  const formCard = $('#formCard'), tableCard = $('#journalTableCard'), tscroll = tableCard?.querySelector('.tscroll');
-  if (!formCard || !tableCard || !tscroll) return;
-  if (window.innerWidth <= 1120) {
-    tableCard.style.height = 'auto';
-    tscroll.style.maxHeight = window.innerWidth <= 640 ? '340px' : '380px';
-    return;
-  }
-  const formH = formCard.offsetHeight;
-  if (!formH) return;
-  tableCard.style.height = formH + 'px';
-  const headH = tableCard.querySelector('.card-h')?.offsetHeight || 55;
-  const noteH = tableCard.querySelector('.store-note')?.offsetHeight || 35;
-  const maxTableH = Math.max(200, formH - headH - noteH);
-  tscroll.style.maxHeight = maxTableH + 'px';
+  const tableCard = $('#journalTableCard'), tscroll = tableCard?.querySelector('.tscroll');
+  if (tableCard) tableCard.style.height = '';
+  if (tscroll) tscroll.style.maxHeight = '';
 }
 
 /* ---- Kalender ---- */
@@ -1786,15 +1768,17 @@ function renderCalendar() {
   trades.forEach(t => { if (!grouped.has(t.date)) grouped.set(t.date, []); grouped.get(t.date).push(t) });
   let cells = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'].map(d => `<div class="cal-hd">${d}</div>`).join('');
   for (let i = 0; i < startIdx; i++)cells += '<div class="cal-day empty"></div>';
-  let totalTrades = 0, totalWin = 0, totalLoss = 0;
+  let totalTrades = 0, totalWin = 0, totalLoss = 0, targetDays = 0;
   for (let d = 1; d <= dim; d++) {
     const ds = `${cur.y}-${pad(cur.m + 1)}-${pad(d)}`, dayTrades = grouped.get(ds) || [];
     let cls = '', ttl = fmtDate(ds);
     if (dayTrades.length) {
       const netRet = dayTrades.reduce((s, t) => s + tradeRet(t), 0);
       cls = pcls(netRet) === 'pos' ? 'win' : pcls(netRet) === 'neg' ? 'loss' : 'bee';
+      if (netRet >= 10) { cls += ' target'; targetDays++; }
       const labels = dayTrades.map(t => `${t.asset || '—'} ${fmtPct(tradeRet(t))}`).join(' | ');
       ttl += ` · ${dayTrades.length} trade${dayTrades.length > 1 ? 's' : ''}: ${labels}`;
+      if (netRet >= 10) ttl += ` · ★ Target harian ≥10% tercapai (${fmtPct(netRet)})`;
       totalTrades += dayTrades.length;
       dayTrades.forEach(t => { const r = tradeRet(t); if (r > 0) totalWin++; else if (r < 0) totalLoss++ });
     }
@@ -1803,7 +1787,7 @@ function renderCalendar() {
     cells += `<div class="cal-day ${cls}${today}${sel}" data-d="${ds}" title="${esc(ttl)}">${d}${countBadge}</div>`;
   }
   $('#calGrid').innerHTML = cells;
-  $('#calSum').textContent = totalTrades ? `${totalTrades} trade${totalTrades > 1 ? 's' : ''} · ${totalWin} profit · ${totalLoss} loss` : 'Belum ada trade bulan ini';
+  $('#calSum').textContent = totalTrades ? `${totalTrades} trade${totalTrades > 1 ? 's' : ''} · ${totalWin} profit · ${totalLoss} loss${targetDays ? ` · ★ ${targetDays} hari target` : ''}` : 'Belum ada trade bulan ini';
 }
 function renderCalDetail() {
   const box = $('#calDetail');
@@ -2170,7 +2154,7 @@ function renderTable() {
   const eq = calcAccountEquity();
   syncJournalDateFilterUI(rows.length);
   $('#tblCount').textContent = `Menampilkan ${rows.length} dari ${trades.length} trade`;
-  if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:34px">${trades.length ? 'Tidak ada trade yang cocok dengan filter.' : 'Belum ada trade — catat trade pertamamu melalui formulir di samping.'}</td></tr>`; return }
+  if (!rows.length) { tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:34px">${trades.length ? 'Tidak ada trade yang cocok dengan filter.' : 'Belum ada trade — catat trade pertamamu melalui formulir di samping.'}</td></tr>`; return }
   tb.innerHTML = rows.map(t => {
     const r = tradeRet(t), c = pcls(r);
     const res = r > 0 ? ['win', 'PROFIT'] : r < 0 ? ['loss', 'LOSS'] : ['bee', 'BE'];
@@ -2183,13 +2167,12 @@ function renderTable() {
       <td class="mono r">${t.lot != null ? Number(t.lot).toFixed(2) : '<span class="dim">—</span>'}</td>
       <td class="mono r">${fmtPrice(t.entry)}</td>
       <td class="mono r">${fmtPrice(t.exit)}</td>
-      <td class="mono r ${c}"><b>${fmtPct(r)}</b></td>
-      <td><span class="badge ${res[0]}">${res[1]}</span></td>
+      <td class="mono r ${c}"><div class="ret-cell"><b>${fmtPct(r)}</b><span class="badge sm ${res[0]}">${res[1]}</span></div></td>
       <td class="notes-cell" title="${esc(t.notes || '')}">${t.notes ? esc(trunc(t.notes, 32)) : '<span class="dim">—</span>'} <span class="chev">${ex ? '▴' : '▾'}</span></td></tr>`;
     if (ex) {
       const mv = t.position === 'LONG' ? (t.exit - t.entry) : (t.entry - t.exit);
       const pnlStr = pInfo ? `${pInfo.pnlUsd >= 0 ? '+' : '-'}${fmtUsd(Math.abs(pInfo.pnlUsd))} (Saldo: ${fmtUsd(pInfo.eqAfter)})` : '—';
-      html += `<tr class="trow-detail"><td colspan="9"><div class="detail-grid">
+      html += `<tr class="trow-detail"><td colspan="8"><div class="detail-grid">
         <div><label>Catatan / Trading Journal</label><p>${t.notes ? esc(t.notes) : '<span class="dim">Tidak ada catatan.</span>'}</p></div>
         <div><label>Pergerakan Harga</label><p class="mono">${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}<br><span class="${c}">${mv >= 0 ? '+' : ''}${fmtPrice(Math.abs(mv)).replace(/^/, '')} ${mv >= 0 ? '▲' : '▼'}</span></p></div>
         <div><label>Lot &amp; Dampak Modal (Opsi B)</label><p class="mono">${t.lot != null ? Number(t.lot).toFixed(2) + ' Lot' : '—'}<br><span class="${c}">${pnlStr}</span></p></div>
@@ -2651,14 +2634,358 @@ function renderInsights(arr, m) {
     out.push(`Seluruh trade pada periode ini berakhir Break-Even (BE).`);
   }
 
+  // 5. Ringkasan Disiplin & Pola dari Catatan Jurnal (Notes)
+  const notedTrades = arr.filter(t => t.notes && t.notes.trim().length > 0);
+  if (notedTrades.length > 0) {
+    const notedWins = notedTrades.filter(t => tradeRet(t) > 0).length;
+    const notedWR = (notedWins / notedTrades.length) * 100;
+    const unnotedTrades = arr.filter(t => !t.notes || !t.notes.trim().length);
+    const emoRx = /\b(fomo|buru|terburu|emosi|panik|ragu|kecepatan|telat|geser\s*sl|balas|dendam|overlot|tanpa\s*konfirmasi|spekulasi|nekat)\b/i;
+    const planRx = /\b(plan|sop|konfirmasi|sabar|retest|breakout|rejection|supply|demand|snr|support|resistance|smc|order\s*block|fvg|trendline|pullback)\b/i;
+    const emoTrades = notedTrades.filter(t => emoRx.test(t.notes));
+    const planTrades = notedTrades.filter(t => planRx.test(t.notes));
+
+    if (emoTrades.length > 0) {
+      const emoSum = emoTrades.reduce((s, t) => s + tradeRet(t), 0);
+      out.push(`Evaluasi Catatan Psikologi: Terdeteksi <b>${emoTrades.length} trade</b> dengan kata kunci impulsif/emosi di catatan (akumulasi <b>${fmtPct(emoSum)}</b>). Gunakan tombol <b>✨ Evaluasi Catatan (AI)</b> di bawah untuk bedah mendalam.`);
+    } else if (planTrades.length > 0) {
+      const planWins = planTrades.filter(t => tradeRet(t) > 0).length;
+      const planWR = (planWins / planTrades.length) * 100;
+      out.push(`Kepatuhan Setup di Catatan: <b>${planTrades.length} dari ${notedTrades.length} catatan</b> menyebutkan setup/plan teknikal dengan Win Rate <b>${fmtPct(planWR, 1)}</b>.`);
+    } else if (unnotedTrades.length > 0) {
+      const unnotedWR = (unnotedTrades.filter(t => tradeRet(t) > 0).length / unnotedTrades.length) * 100;
+      out.push(`Disiplin Pencatatan Jurnal: Anda menulis evaluasi pada <b>${notedTrades.length} dari ${arr.length} trade</b> (WR dengan catatan <b>${fmtPct(notedWR, 1)}</b> vs tanpa catatan <b>${fmtPct(unnotedWR, 1)}</b>).`);
+    } else {
+      out.push(`Disiplin Pencatatan Jurnal: Seluruh <b>${notedTrades.length} trade</b> memiliki catatan evaluasi lengkap (Win Rate <b>${fmtPct(notedWR, 1)}</b>).`);
+    }
+  } else {
+    out.push(`Catatan Jurnal Kosong: Belum ada teks alasan entry/evaluasi yang ditulis pada kolom Catatan. Isi kolom Catatan saat mencatat trade agar AI Coach dapat mengevaluasi tata cara trading Anda.`);
+  }
+
   ul.innerHTML = out.map(x => `<li>${x}</li>`).join('');
+  renderAiCoachBox(arr);
 }
+
+/* ================= AI TRADING COACH (GEMINI API) ================= */
+const LS_GEMINI_KEY = 'tjd.gemini_api_key.v1';
+const LS_AI_CACHE = 'tjd.ai_coach_cache.v1';
+const DEFAULT_GEMINI_KEY = 'AQ.Ab8RN6KWhVahVmF9T87C4bzYwH4-DJa1wdn9q6_5kgRoKMrPgg';
+let isAiEvaluating = false;
+
+function getGeminiApiKey() {
+  try {
+    const custom = (localStorage.getItem(LS_GEMINI_KEY) || '').trim();
+    if (custom) return custom;
+  } catch (_) {}
+  return DEFAULT_GEMINI_KEY;
+}
+
+function setGeminiApiKey(key) {
+  const clean = (key || '').trim();
+  try {
+    if (clean) localStorage.setItem(LS_GEMINI_KEY, clean);
+    else localStorage.removeItem(LS_GEMINI_KEY);
+  } catch (_) {}
+}
+
+function computeNotesDigest(arr) {
+  if (!arr || !arr.length) return 'empty';
+  const str = arr.map(t => `${t.id}:${t.date}:${t.asset}:${t.position}:${t.entry}:${t.exit}:${t.lot}:${(t.notes || '').trim()}`).join('|');
+  return arr.length + '_' + simpleHash(str);
+}
+
+function loadAiCache() {
+  try {
+    return JSON.parse(localStorage.getItem(LS_AI_CACHE) || '{}') || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveAiCache(digest, payload) {
+  try {
+    const cache = loadAiCache();
+    cache[digest] = { ...payload, updatedAt: Date.now() };
+    // Simpan maksimal 15 digest terakhir agar hemat storage
+    const keys = Object.keys(cache);
+    if (keys.length > 15) {
+      keys.sort((a, b) => (cache[a].updatedAt || 0) - (cache[b].updatedAt || 0));
+      keys.slice(0, keys.length - 15).forEach(k => delete cache[k]);
+    }
+    localStorage.setItem(LS_AI_CACHE, JSON.stringify(cache));
+  } catch (_) {}
+}
+
+function renderAiCoachBox(arr = pt()) {
+  const box = $('#aiCoachBox');
+  if (!box) return;
+  const notedTrades = arr.filter(t => t.notes && t.notes.trim().length > 0);
+  const digest = computeNotesDigest(arr);
+  const cached = loadAiCache()[digest];
+
+  if (isAiEvaluating) {
+    box.innerHTML = `
+      <div class="ai-coach-card loading">
+        <div class="ai-coach-head">
+          <span class="ai-badge"><span class="pulse"></span> AI TRADING COACH · GEMINI</span>
+          <span class="mono dim" style="font-size:11px">Menganalisis ${notedTrades.length} catatan...</span>
+        </div>
+        <div class="ai-loading-body">
+          <div class="ai-spinner"></div>
+          <div>
+            <b>Sedang membaca &amp; mengevaluasi seluruh catatan jurnal Anda...</b>
+            <p class="dim" style="font-size:11.5px;margin-top:2px">Mengekstrak pola psikologi, kepatuhan SOP teknikal, kebiasaan berulang, dan rekomendasi perbaikan.</p>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (cached && cached.data) {
+    const d = cached.data;
+    const timeStr = cached.updatedAt ? new Date(cached.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '';
+    box.innerHTML = `
+      <div class="ai-coach-card">
+        <div class="ai-coach-head">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="ai-badge">✨ EVALUASI JURNAL AI COACH</span>
+            <span class="mono dim" style="font-size:10.5px">${notedTrades.length} catatan dianalisis${timeStr ? ` · ${timeStr}` : ''}</span>
+          </div>
+          <button type="button" class="ai-refresh-link" id="btnAiRefreshInline" title="Evaluasi ulang dengan AI">↻ Analisis Ulang</button>
+        </div>
+        <div class="ai-coach-grid">
+          <div class="ai-coach-item">
+            <div class="aci-title">🧠 Psikologi &amp; Emosi</div>
+            <p>${esc(d.psikologi || '—')}</p>
+          </div>
+          <div class="ai-coach-item">
+            <div class="aci-title">📐 Eksekusi &amp; Setup Teknikal</div>
+            <p>${esc(d.teknikal || '—')}</p>
+          </div>
+          <div class="ai-coach-item">
+            <div class="aci-title">⚠️ Kebiasaan yang Perlu Diperbaiki</div>
+            <p>${esc(d.kebiasaan_buruk || '—')}</p>
+          </div>
+          <div class="ai-coach-item highlight">
+            <div class="aci-title">🎯 Rencana Perbaikan (Action Plan)</div>
+            <p>${esc(d.rekomendasi || '—')}</p>
+          </div>
+        </div>
+      </div>`;
+    const btnRef = $('#btnAiRefreshInline');
+    if (btnRef) btnRef.onclick = () => runAiCoachEvaluation(true);
+    return;
+  }
+
+  if (!notedTrades.length) {
+    box.innerHTML = `
+      <div class="ai-coach-card empty">
+        <div class="ai-coach-head">
+          <span class="ai-badge">✨ EVALUASI JURNAL AI COACH</span>
+        </div>
+        <p class="dim" style="font-size:12px;margin-top:6px">Belum ada catatan teks pada periode ini. Tuliskan alasan entry, kondisi pasar, atau evaluasi emosi pada kolom <b>Catatan / Trading Journal</b> saat menginput trade, lalu klik <b>✨ Evaluasi Catatan (AI)</b>.</p>
+      </div>`;
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="ai-coach-card prompt">
+      <div class="ai-coach-head">
+        <span class="ai-badge">✨ EVALUASI JURNAL AI COACH SIAP</span>
+        <span class="mono dim" style="font-size:11px">${notedTrades.length} catatan trade terdeteksi</span>
+      </div>
+      <p style="font-size:12.5px;color:var(--mut);margin:6px 0 10px">AI Coach siap membedah <b>${notedTrades.length} catatan jurnal</b> Anda untuk menemukan pola emosi, efektivitas setup, dan saran perbaikan tata cara trading.</p>
+      <button type="button" class="btn sm primary" id="btnAiStartInline" style="width:100%;justify-content:center;height:34px">✨ Mulai Evaluasi Catatan dengan AI Sekarang</button>
+    </div>`;
+  const btnStart = $('#btnAiStartInline');
+  if (btnStart) btnStart.onclick = () => runAiCoachEvaluation(true);
+}
+
+async function runAiCoachEvaluation(force = false) {
+  if (isAiEvaluating) return;
+  const arr = pt();
+  if (!arr.length) {
+    toast('Belum ada data trade pada periode ini untuk dievaluasi', 'err');
+    return;
+  }
+  const notedTrades = arr.filter(t => t.notes && t.notes.trim().length > 0);
+  if (!notedTrades.length) {
+    toast('Belum ada teks catatan pada trade di periode ini. Isi kolom Catatan di Jurnal terlebih dahulu.', 'err');
+    renderAiCoachBox(arr);
+    return;
+  }
+
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    openAiKeyModal();
+    return;
+  }
+
+  const digest = computeNotesDigest(arr);
+  const cached = loadAiCache()[digest];
+  if (!force && cached && cached.data) {
+    renderAiCoachBox(arr);
+    return;
+  }
+
+  isAiEvaluating = true;
+  const btnMain = $('#btnRunAiCoach');
+  if (btnMain) {
+    btnMain.disabled = true;
+    btnMain.textContent = '⏳ Mengevaluasi...';
+  }
+  renderAiCoachBox(arr);
+
+  try {
+    const m = metrics(arr);
+    const tradeLines = arr.slice(-40).map((t, idx) => {
+      const r = tradeRet(t);
+      const status = r > 0 ? 'PROFIT' : r < 0 ? 'LOSS' : 'BE';
+      const noteStr = (t.notes || '').trim() || '(Tanpa catatan)';
+      return `${idx + 1}. [${t.date}] ${t.asset} ${t.position} (${Number(t.lot || 0.01).toFixed(2)} lot) | Entry: ${t.entry} -> Exit: ${t.exit} | Return: ${fmtPct(r)} (${status}) | Catatan Trader: "${noteStr}"`;
+    }).join('\n');
+
+    const promptText = `Anda adalah Institutional Forex & Gold Trading Coach profesional. Tugas Anda adalah mengevaluasi tata cara trading, psikologi, kepatuhan SOP teknikal, dan kebiasaan trader berdasarkan data transaksi dan CATATAN JURNAL yang ditulis langsung oleh trader berikut ini.
+
+Ringkasan Performa Periode Ini:
+- Total Trade: ${m.total} (${m.wins} Win, ${m.losses} Loss, Win Rate: ${fmtPct(m.winRate, 1)})
+- Cumulative Compounded Return: ${fmtPct(m.comp)} | Max Drawdown: ${fmtPct(m.maxDD)}
+- Jumlah Trade dengan Catatan Jurnal: ${notedTrades.length} dari ${arr.length} trade
+
+Daftar Riwayat Transaksi & Catatan Jurnal Trader:
+${tradeLines}
+
+Instruksi Evaluasi:
+Analisis secara spesifik isi teks "Catatan Trader" di atas dan kaitkan dengan hasil PROFIT/LOSS-nya. Berikan evaluasi jujur, tajam, dan membangun dalam Bahasa Indonesia dengan format JSON murni (tanpa markdown codeblock) yang memiliki tepat 4 key berikut:
+{
+  "psikologi": "Evaluasi kondisi mental, kesabaran, pengendalian diri, atau indikasi FOMO/emosi/keraguan yang tercermin dari kalimat catatan trader (2-3 kalimat padat).",
+  "teknikal": "Evaluasi alasan entry/exit dan kualitas setup teknikal yang ditulis trader di catatan saat profit dibanding saat loss (2-3 kalimat padat).",
+  "kebiasaan_buruk": "Pola kesalahan atau kebiasaan kurang disiplin dari catatan yang paling menggerus profit atau wajib dihentikan (1-2 kalimat tegas).",
+  "rekomendasi": "Saran perbaikan konkret dan aturan praktis untuk eksekusi trade berikutnya berdasarkan evaluasi catatan di atas (2-3 kalimat aplikatif)."
+}`;
+
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.5-flash'];
+    let parsedResult = null;
+    let lastError = null;
+
+    for (const modelName of modelsToTry) {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            generationConfig: {
+              temperature: 0.35,
+              responseMimeType: 'application/json'
+            },
+            contents: [{
+              role: 'user',
+              parts: [{ text: promptText }]
+            }]
+          })
+        });
+
+        const rawJson = await res.json();
+        if (!res.ok) {
+          lastError = new Error(rawJson?.error?.message || `HTTP ${res.status}`);
+          continue;
+        }
+
+        const parts = rawJson?.candidates?.[0]?.content?.parts || [];
+        const textPart = parts.find(p => typeof p.text === 'string' && p.text.trim().startsWith('{')) || parts.find(p => typeof p.text === 'string');
+        if (!textPart || !textPart.text) {
+          lastError = new Error('Respons AI kosong');
+          continue;
+        }
+
+        const cleaned = textPart.text.trim().replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+        parsedResult = JSON.parse(cleaned);
+        if (parsedResult && (parsedResult.psikologi || parsedResult.rekomendasi)) {
+          break;
+        }
+      } catch (innerErr) {
+        lastError = innerErr;
+      }
+    }
+
+    if (!parsedResult) {
+      throw lastError || new Error('Gagal mendapatkan respons dari Gemini API');
+    }
+
+    saveAiCache(digest, { data: parsedResult });
+    toast('Evaluasi catatan jurnal oleh AI Coach selesai!');
+  } catch (err) {
+    console.error('AI Coach evaluation error:', err);
+    toast('Gagal mengevaluasi catatan: ' + (err.message || 'Periksa koneksi / API Key'), 'err');
+  } finally {
+    isAiEvaluating = false;
+    if (btnMain) {
+      btnMain.disabled = false;
+      btnMain.textContent = '✨ Evaluasi Catatan (AI)';
+    }
+    renderAiCoachBox(pt());
+  }
+}
+
+function openAiKeyModal() {
+  const root = $('#modalRoot');
+  const currentKey = getGeminiApiKey();
+  root.innerHTML = `<div class="overlay">
+    <div class="modal" style="width:min(460px,94vw)">
+      <div class="cap-modal-head">
+        <div>
+          <h3>Pengaturan Gemini API Key</h3>
+          <p class="mmsg" style="margin:2px 0 0">Digunakan oleh fitur <b>AI Trading Coach</b> untuk mengevaluasi catatan jurnal trading Anda secara otomatis.</p>
+        </div>
+        <button type="button" class="sync-banner-close" id="aiKeyCloseTop" title="Tutup">✕</button>
+      </div>
+      <div style="margin-bottom:14px">
+        <label style="font:600 10.5px var(--font-b);letter-spacing:.06em;text-transform:uppercase;color:var(--mut);display:block;margin-bottom:6px">Google Gemini API Key</label>
+        <input type="text" id="aiKeyInput" value="${esc(currentKey)}" placeholder="Masukkan API Key Gemini..." style="font-family:var(--font-m);font-size:12.5px">
+        <p class="hint" style="margin-top:6px">API Key Anda sudah terpasang otomatis dan tersimpan aman di browser perangkat ini.</p>
+      </div>
+      <div class="mact">
+        <button type="button" class="btn ghost" id="aiKeyResetDefault">Gunakan Key Default</button>
+        <button type="button" class="btn primary" id="aiKeySaveBtn">Simpan &amp; Evaluasi ✨</button>
+      </div>
+    </div>
+  </div>`;
+
+  const close = () => { root.innerHTML = ''; };
+  $('#aiKeyCloseTop').onclick = close;
+  root.querySelector('.overlay').addEventListener('click', e => {
+    if (e.target.classList.contains('overlay')) close();
+  });
+  $('#aiKeyResetDefault').onclick = () => {
+    setGeminiApiKey('');
+    $('#aiKeyInput').value = getGeminiApiKey();
+    toast('API Key dikembalikan ke default');
+  };
+  $('#aiKeySaveBtn').onclick = () => {
+    const val = ($('#aiKeyInput').value || '').trim();
+    if (!val) {
+      toast('API Key tidak boleh kosong', 'err');
+      return;
+    }
+    setGeminiApiKey(val);
+    close();
+    toast('API Key Gemini disimpan');
+    runAiCoachEvaluation(true);
+  };
+}
+
 function renderAnalytics() {
   const has = trades.length > 0;
   $('#anEmpty').hidden = has; $('#anBody').hidden = !has;
   if (!has) return;
   const arr = pt(), m = metrics(arr);
   renderVS(arr); renderHist(); renderDDChart(); renderConsist(arr); renderMonthly(arr); renderInsights(arr, m);
+  // Otomatis jalankan evaluasi AI jika ada catatan yang belum pernah dievaluasi
+  const noted = arr.filter(t => t.notes && t.notes.trim().length > 0);
+  const digest = computeNotesDigest(arr);
+  if (noted.length > 0 && !loadAiCache()[digest] && !isAiEvaluating) {
+    runAiCoachEvaluation(false);
+  }
   _freshRender = false;
 }
 
@@ -3148,6 +3475,8 @@ syncPeriodSeg(); syncCumSeg(); syncPosSeg(); updatePreview(); updateFormUI();
 renderAll();
 
 if ($('#btnAuth')) $('#btnAuth').onclick = openAuthModal;
+if ($('#btnRunAiCoach')) $('#btnRunAiCoach').onclick = () => runAiCoachEvaluation(true);
+if ($('#btnAiKeyConfig')) $('#btnAiKeyConfig').onclick = openAiKeyModal;
 const btnApply = $('#btnApplyUpdate');
 if (btnApply) {
   btnApply.onclick = async function () {

@@ -16,7 +16,7 @@
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
     rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="style.css?v=20261106b">
+  <link rel="stylesheet" href="style.css?v=20261108a">
 </head>
 
 <body>
@@ -177,6 +177,7 @@
                   <span><i style="background:rgba(246,70,93,.7)"></i>Loss</span>
                   <span><i style="background:rgba(148,163,184,.5)"></i>Break-even</span>
                   <span><i style="background:rgba(148,163,184,.14)"></i>Tanpa trade</span>
+                  <span><i class="lg-target"></i>Target ≥10% ★</span>
                 </div>
                 <div class="cal" id="calGrid"></div>
                 <p class="hint cal-note">Hari tanpa trade adalah istirahat yang disengaja — bukan pelanggaran.</p>
@@ -300,8 +301,7 @@
                     <th class="r">Lot</th>
                     <th class="r">Harga Entry</th>
                     <th class="r">Harga Exit</th>
-                    <th class="r">Return (%)</th>
-                    <th>Hasil</th>
+                    <th class="r">Return / Hasil</th>
                     <th>Catatan</th>
                   </tr>
                 </thead>
@@ -546,12 +546,17 @@
             <section class="card reveal" style="--d:50ms">
               <div class="card-h">
                 <div>
-                  <h3>Insight Otomatis</h3>
-                  <p class="hint">Diturunkan langsung dari data tersimpan</p>
+                  <h3>Insight Otomatis &amp; Evaluasi Jurnal</h3>
+                  <p class="hint">Diturunkan dari statistik &amp; evaluasi catatan trading (AI Coach)</p>
+                </div>
+                <div class="ai-head-actions">
+                  <button type="button" class="btn sm ghost" id="btnAiKeyConfig" title="Atur Gemini API Key">🔑 API Key</button>
+                  <button type="button" class="btn sm primary" id="btnRunAiCoach">✨ Evaluasi Catatan (AI)</button>
                 </div>
               </div>
               <div class="card-b">
                 <ul id="insights"></ul>
+                <div class="ai-coach-box" id="aiCoachBox"></div>
               </div>
             </section>
           </div>
@@ -599,7 +604,7 @@
   <div id="modalRoot"></div>
   <div id="authGate" class="auth-gate" hidden></div>
 
-  <script src="script.js?v=20261106b"></script>
+  <script src="script.js?v=20261108a"></script>
 </body>
 
 </html>
