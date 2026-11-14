@@ -3665,11 +3665,15 @@ Kembalikan HANYA objek JSON valid (tanpa markdown blok kode tambahan jika memung
       const oJson = await oRes.json();
       rawText = oJson?.choices?.[0]?.message?.content || '';
     } else {
-      // Google Gemini API: Single-pass Direct Structured JSON Mode (cepat tanpa latency ganda google_search)
+      // Google Gemini API: Single-pass Direct Structured JSON Mode dengan auto-fallback saat high demand / error model
       const tryModels = [];
       const addModel = m => { if (m && m !== 'gemini-2.5-flash' && !tryModels.includes(m)) tryModels.push(m); };
       if (aiState.model && aiState.model !== 'gemini-2.5-flash') addModel(aiState.model);
       addModel('gemini-3.8-flash');
+
+      if (!Array.isArray(aiState.availableModels) || !aiState.availableModels.length) {
+        await fetchGeminiAvailableModels(rawKey).catch(() => []);
+      }
       if (Array.isArray(aiState.availableModels) && aiState.availableModels.length) {
         rankGeminiModels(aiState.availableModels).forEach(addModel);
       }
@@ -3679,7 +3683,7 @@ Kembalikan HANYA objek JSON valid (tanpa markdown blok kode tambahan jika memung
       let usedModel = null;
       let lastGeminiErr = 'Gagal menghubungi Gemini API.';
 
-      for (const candidate of tryModels.slice(0, 5)) {
+      for (const candidate of tryModels.slice(0, 6)) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(rawKey)}`;
 
         const gRes = await fetchWithTimeout(url, {
@@ -3706,8 +3710,13 @@ Kembalikan HANYA objek JSON valid (tanpa markdown blok kode tambahan jika memung
         if (gRes.status === 401 || gRes.status === 403 || /API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
           throw new Error(lastGeminiErr);
         }
-        const isModelUnavailable = gRes.status === 404 || /no longer available|not found|not supported for generateContent|deprecated/i.test(lastGeminiErr);
-        if (!isModelUnavailable) {
+        const canFallback =
+          gRes.status === 404 ||
+          gRes.status === 429 ||
+          gRes.status === 500 ||
+          gRes.status === 503 ||
+          /high demand|overloaded|unavailable|quota|rate limit|resource_exhausted|no longer available|not found|not supported|deprecated|try again later/i.test(lastGeminiErr);
+        if (!canFallback) {
           throw new Error(lastGeminiErr);
         }
       }
