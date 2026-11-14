@@ -942,6 +942,7 @@ function unlockGate() {
     gate.innerHTML = '';
     trades = loadTrades();
     capitalConfig = loadCapitalConfig();
+    if (typeof loadAiConfig === 'function') loadAiConfig();
     renderAll();
     syncFromCloud();
     subscribeRealtime();
@@ -3001,14 +3002,905 @@ $('#btnInfo').onclick = () => infoBox('Metrik & Penyimpanan', `
   <p class="mmsg">Return perubahan harga <b>bukan</b> return modal aktual — leverage, ukuran posisi, dan biaya membuat hasil nyata berbeda. Dashboard ini tidak mengklaim profit dalam rupiah.</p>
   <dl><dt>Penyimpanan</dt><dd>Data disimpan di <b>localStorage browser</b>: persisten antar refresh, tetapi hanya di perangkat &amp; browser ini, tidak tersinkron, dan ikut terhapus bila data browsing dibersihkan. Gunakan ekspor CSV sebagai backup. Database server dapat dihubungkan kemudian tanpa mengubah struktur data.</dd></dl>`);
 
+/* ================= ANALITIK AI (DESKTOP ONLY · VERIFIED API KEY GATE) ================= */
+const LS_AI_FALLBACK = 'tjd.ai.v1';
+const GEMINI_PREFERRED_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.8-pro',
+  'gemini-3.5-flash',
+  'gemini-3.0-flash',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-pro'
+];
+
+const aiState = {
+  provider: 'gemini',
+  apiKeyB64: '',
+  verified: false,
+  model: 'gemini-3.8-flash',
+  availableModels: [],
+  verifiedAt: 0,
+  lastHash: '',
+  lastReport: null,
+  isRunning: false,
+  gateOpen: false
+};
+
+function getGeminiHeaders(rawKey, withJson = false) {
+  const h = {};
+  if (rawKey) h['x-goog-api-key'] = rawKey;
+  if (withJson) h['Content-Type'] = 'application/json';
+  return h;
+}
+
+function getUserAiKey() {
+  if (currentUser && currentUser.email) {
+    return 'tjd.ai.u.' + currentUser.email.toLowerCase();
+  }
+  try {
+    const active = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
+    if (active && active.email) return 'tjd.ai.u.' + active.email.toLowerCase();
+  } catch (_) {}
+  return LS_AI_FALLBACK;
+}
+
+function getDecodedAiKey() {
+  if (!aiState.apiKeyB64) return '';
+  try {
+    return decodeURIComponent(escape(atob(aiState.apiKeyB64)));
+  } catch (_) {
+    return '';
+  }
+}
+
+function loadAiConfig() {
+  try {
+    const raw = localStorage.getItem(getUserAiKey());
+    if (!raw) {
+      Object.assign(aiState, { provider: 'gemini', apiKeyB64: '', verified: false, model: 'gemini-3.8-flash', verifiedAt: 0, lastHash: '', lastReport: null });
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      aiState.provider = parsed.provider === 'openai' ? 'openai' : 'gemini';
+      aiState.apiKeyB64 = parsed.apiKeyB64 || '';
+      aiState.verified = !!(parsed.verified && parsed.apiKeyB64);
+      aiState.model = parsed.model || (aiState.provider === 'openai' ? 'gpt-4o-mini' : 'gemini-3.8-flash');
+      aiState.verifiedAt = Number(parsed.verifiedAt || 0);
+      aiState.lastHash = parsed.lastHash || '';
+      aiState.lastReport = parsed.lastReport || null;
+    }
+  } catch (_) {}
+}
+
+function saveAiConfig() {
+  try {
+    localStorage.setItem(getUserAiKey(), JSON.stringify({
+      provider: aiState.provider,
+      apiKeyB64: aiState.apiKeyB64,
+      verified: aiState.verified,
+      model: aiState.model,
+      verifiedAt: aiState.verifiedAt,
+      lastHash: aiState.lastHash,
+      lastReport: aiState.lastReport
+    }));
+  } catch (_) {}
+}
+
+function setAiConnStatus(type, html) {
+  const box = $('#aiConnStatus');
+  if (!box) return;
+  if (!html) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  box.className = 'ai-conn-status ' + (type || 'info');
+  box.innerHTML = html;
+}
+
+function rankGeminiModels(available) {
+  const clean = (available || []).filter(m =>
+    m && !/tts|image|audio|embedding|robotics|computer-use|live/i.test(m)
+  );
+  const pool = clean.length ? clean : (available || []);
+  const ordered = [];
+  const addUnique = m => { if (m && !ordered.includes(m)) ordered.push(m); };
+
+  GEMINI_PREFERRED_MODELS.forEach(p => { if (pool.includes(p)) addUnique(p); });
+  pool.filter(m => m.includes('flash') && !m.includes('lite')).forEach(addUnique);
+  pool.filter(m => m.includes('flash')).forEach(addUnique);
+  pool.filter(m => m.includes('gemini')).forEach(addUnique);
+  pool.forEach(addUnique);
+  return ordered;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(`Koneksi ke server AI timeout (> ${Math.round(timeoutMs / 1000)} detik). Periksa internet atau coba lagi.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchGeminiAvailableModels(rawKey) {
+  const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(rawKey)}`;
+  const res = await fetchWithTimeout(listUrl, {
+    method: 'GET',
+    headers: getGeminiHeaders(rawKey, false)
+  }, 6000);
+  if (!res.ok) {
+    let msg = `Server Google Gemini menolak API Key (HTTP ${res.status})`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.error?.message) msg = errJson.error.message;
+    } catch (_) {}
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  const models = (data?.models || [])
+    .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+    .map(m => String(m.name || '').replace(/^models\//, ''));
+  aiState.availableModels = models;
+  return models;
+}
+
+async function verifyAiServerConnection(provider, rawKey) {
+  const key = (rawKey || '').trim();
+  if (!key || key.length < 12) {
+    return { ok: false, error: 'Masukkan API Key yang valid terlebih dahulu.' };
+  }
+
+  if (provider === 'openai') {
+    try {
+      const res = await fetchWithTimeout('https://api.openai.com/v1/models', {
+        method: 'GET',
+        headers: { 'Authorization': 'Bearer ' + key }
+      }, 6000);
+      if (!res.ok) {
+        let msg = `Server OpenAI menolak API Key (HTTP ${res.status})`;
+        try {
+          const errJson = await res.json();
+          if (errJson?.error?.message) msg = errJson.error.message;
+        } catch (_) {}
+        return { ok: false, error: msg };
+      }
+      const data = await res.json();
+      const models = Array.isArray(data?.data) ? data.data.map(m => m.id) : [];
+      const chosen = models.find(m => m === 'gpt-4o-mini') || models.find(m => m.startsWith('gpt-4o')) || models.find(m => m.startsWith('gpt-4')) || 'gpt-4o-mini';
+      return { ok: true, model: chosen, serverLabel: 'OpenAI API Server' };
+    } catch (err) {
+      return { ok: false, error: 'Gagal menghubungi server OpenAI: ' + (err.message || 'Periksa koneksi internet Anda') };
+    }
+  }
+
+  // Default: Google Gemini API Fast Single-Step Verification (GET /v1beta/models sudah memvalidasi keaslian API Key)
+  try {
+    setAiConnStatus('info', '🔌 Memverifikasi API Key & daftar model ke server Google Gemini...');
+    const available = await fetchGeminiAvailableModels(key);
+    if (!available.length) {
+      return { ok: false, error: 'API Key aktif namun tidak memiliki akses ke model generateContent Gemini.' };
+    }
+
+    const ranked = rankGeminiModels(available).filter(m => m !== 'gemini-2.5-flash');
+    const chosen = ranked.includes('gemini-3.8-flash')
+      ? 'gemini-3.8-flash'
+      : (ranked[0] || available.find(m => m !== 'gemini-2.5-flash') || 'gemini-3.8-flash');
+
+    return { ok: true, model: chosen, serverLabel: 'Google Gemini AI Server' };
+  } catch (err) {
+    return { ok: false, error: 'Gagal menghubungi server Google Gemini: ' + (err.message || 'Periksa koneksi internet Anda') };
+  }
+}
+
+async function fetchExternalMarketContext() {
+  const out = {
+    fetchedAt: new Date().toISOString(),
+    spotRates: null,
+    goldUsd: null
+  };
+  try {
+    const fxRes = await fetchWithTimeout('https://open.er-api.com/v6/latest/USD', {}, 1800);
+    if (fxRes.ok) {
+      const fxData = await fxRes.json();
+      if (fxData?.rates) {
+        const r = fxData.rates;
+        out.spotRates = {
+          EURUSD: r.EUR ? +(1 / r.EUR).toFixed(5) : null,
+          GBPUSD: r.GBP ? +(1 / r.GBP).toFixed(5) : null,
+          AUDUSD: r.AUD ? +(1 / r.AUD).toFixed(5) : null,
+          NZDUSD: r.NZD ? +(1 / r.NZD).toFixed(5) : null,
+          USDJPY: r.JPY ? +r.JPY.toFixed(3) : null,
+          USDCAD: r.CAD ? +r.CAD.toFixed(5) : null,
+          USDCHF: r.CHF ? +r.CHF.toFixed(5) : null
+        };
+      }
+    }
+  } catch (_) {}
+  return out;
+}
+
+function renderLockedPreviewPlaceholders() {
+  const jBox = $('#aiJournalInsightBody');
+  const mBox = $('#aiMacroGeoBody');
+  const fBox = $('#aiFundamentalBiasBody');
+  if (jBox && !jBox.innerHTML.trim()) {
+    jBox.innerHTML = `
+      <div class="ai-exec-box">
+        <div class="ai-exec-title">RINGKASAN EVALUASI JURNAL &amp; PSIKOLOGI TRADING</div>
+        <p>Menganalisis catatan entry/exit, disiplin ukuran lot, rasio kemenangan, serta pola psikologis berulang pada jurnal Anda...</p>
+      </div>
+      <div class="ai-insight-list">
+        <div class="ai-insight-item">
+          <div class="ai-ii-head"><span class="badge win">KEPATUHAN SOP</span><b>Evaluasi Konfirmasi Entry &amp; Manajemen Risiko</b></div>
+          <p>Menghubungkan narasi catatan trading Anda dengan hasil profit/loss aktual untuk menemukan setup paling presisi.</p>
+        </div>
+        <div class="ai-insight-item">
+          <div class="ai-ii-head"><span class="badge short">PSIKOLOGI &amp; EMOSI</span><b>Deteksi Bias FOMO, Overtrading &amp; Geser SL</b></div>
+          <p>Mengidentifikasi pola emosi dari teks catatan yang berpotensi menggerus ekuitas akun.</p>
+        </div>
+      </div>`;
+  }
+  if (mBox && !mBox.innerHTML.trim()) {
+    mBox.innerHTML = `
+      <div class="ai-macro-grid">
+        <div class="ai-macro-box">
+          <div class="ai-mb-tag">🇺🇸 EKONOMI AMERIKA SERIKAT &amp; THE FED</div>
+          <p>Memantau kebijakan suku bunga FOMC, rilis inflasi CPI/PCE, data NFP, imbal hasil US Treasury, serta kekuatan DXY.</p>
+        </div>
+        <div class="ai-macro-box">
+          <div class="ai-mb-tag">🌍 KONFLIK GEOPOLITIK &amp; ARUS SAFE HAVEN</div>
+          <p>Menganalisis dampak eskalasi geopolitik global terhadap lonjakan permintaan aset safe haven (XAUUSD, USD, JPY, CHF).</p>
+        </div>
+      </div>`;
+  }
+  if (fBox && !fBox.innerHTML.trim()) {
+    const samplePairs = ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF'];
+    fBox.innerHTML = `<div class="ai-bias-grid">${samplePairs.map(p => `
+      <div class="ai-bias-card">
+        <div class="ai-bc-top"><b>${p}</b><span class="badge bee">MENUNGGU AI</span></div>
+        <div class="ai-bc-driver">Verifikasi API Key untuk membuka arah bias fundamental &amp; katalis makro terkini.</div>
+      </div>`).join('')}</div>`;
+  }
+}
+
+function syncAiGateUI(forceShowModal = false) {
+  const stage = $('#aiStage');
+  const overlay = $('#aiGateOverlay');
+  const cancelBtn = $('#btnCancelAiGate');
+  const keyInput = $('#aiApiKeyInput');
+  const provSel = $('#aiProviderSelect');
+  const helpLink = $('#aiKeyHelpLink');
+  const pill = $('#aiServerPill');
+  const serverTxt = $('#aiServerText');
+  if (!stage || !overlay) return;
+
+  const isVerified = !!(aiState.verified && getDecodedAiKey());
+  const showGate = !isVerified || forceShowModal;
+  aiState.gateOpen = showGate;
+
+  stage.classList.toggle('locked', showGate);
+  overlay.hidden = !showGate;
+  if (cancelBtn) cancelBtn.hidden = !isVerified;
+
+  if (provSel) provSel.value = aiState.provider || 'gemini';
+  if (helpLink) {
+    if ((provSel?.value || aiState.provider) === 'openai') {
+      helpLink.href = 'https://platform.openai.com/api-keys';
+      helpLink.textContent = '⚡ Buka OpenAI API Keys ↗';
+    } else {
+      helpLink.href = 'https://aistudio.google.com/app/apikey';
+      helpLink.textContent = '⚡ Dapatkan Gemini API Key Gratis ↗';
+    }
+  }
+  if (keyInput && showGate && isVerified && !keyInput.value) {
+    keyInput.value = getDecodedAiKey();
+  }
+
+  if (pill && serverTxt) {
+    pill.classList.toggle('online', isVerified);
+    serverTxt.textContent = isVerified
+      ? `Server AI Terhubung · ${aiState.provider === 'openai' ? 'OpenAI' : 'Google Gemini'} (${aiState.model})`
+      : 'Server AI: Belum Terverifikasi';
+  }
+
+  const arr = pt();
+  const notesCount = arr.filter(t => t.notes && t.notes.trim()).length;
+  const scopeEl = $('#aiScopeInfo');
+  if (scopeEl) {
+    scopeEl.textContent = `Cakupan (${periodLabel()}): ${arr.length} trade (${notesCount} catatan jurnal) · Bias Fundamental XAUUSD & Major Pairs · Makro AS & Geopolitik`;
+  }
+
+  renderLockedPreviewPlaceholders();
+}
+
+function renderAiReportData(rep) {
+  if (!rep) return;
+  const scoreBadge = $('#aiScoreBadge');
+  if (scoreBadge) {
+    const sc = Number(rep.disciplineScore) || 0;
+    scoreBadge.className = 'badge ' + (sc >= 75 ? 'win' : sc >= 50 ? 'short' : 'loss');
+    scoreBadge.textContent = rep.scoreLabel || `Skor Disiplin: ${sc}/100`;
+  }
+
+  const regimeBadge = $('#aiRegimeBadge');
+  if (regimeBadge && rep.macroSentiment) {
+    const reg = String(rep.macroSentiment.regime || 'MIXED');
+    const isRiskOff = reg.toUpperCase().includes('OFF') || reg.toUpperCase().includes('SAFE');
+    const isRiskOn = reg.toUpperCase().includes('ON');
+    regimeBadge.className = 'badge ' + (isRiskOff ? 'short' : isRiskOn ? 'win' : 'long');
+    regimeBadge.textContent = reg;
+  }
+
+  const updEl = $('#aiLastUpdatedText');
+  if (updEl && rep.generatedAt) {
+    const d = new Date(rep.generatedAt);
+    updEl.textContent = `Diperbarui: ${pad(d.getDate())} ${MONTHS[d.getMonth()]} ${d.getFullYear()} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  // 1. Render Analisis Catatan & Insight
+  const jBox = $('#aiJournalInsightBody');
+  if (jBox) {
+    const insights = Array.isArray(rep.noteInsights) ? rep.noteInsights : [];
+    const actions = Array.isArray(rep.actionPlan) ? rep.actionPlan : [];
+    jBox.innerHTML = `
+      <div class="ai-exec-box">
+        <div class="ai-exec-title">RINGKASAN EKSEKUTIF CATATAN &amp; PERILAKU TRADING</div>
+        <p>${esc(rep.executiveSummary || '')}</p>
+      </div>
+      <div class="ai-insight-list">
+        ${insights.map(item => {
+          const bCls = item.tone === 'pos' ? 'win' : item.tone === 'neg' ? 'loss' : 'short';
+          return `<div class="ai-insight-item">
+            <div class="ai-ii-head">
+              <span class="badge ${bCls}">${esc(item.badge || 'INSIGHT')}</span>
+              <b>${esc(item.title || '')}</b>
+            </div>
+            <p>${esc(item.detail || '')}</p>
+          </div>`;
+        }).join('')}
+      </div>
+      ${actions.length ? `
+        <div class="ai-action-box">
+          <div class="ai-exec-title">🎯 RENCANA TINDAK LANJUT &amp; EVALUASI DISIPLIN</div>
+          <ul class="ai-action-list">
+            ${actions.map(a => `<li>${esc(a)}</li>`).join('')}
+          </ul>
+        </div>
+      ` : ''}
+    `;
+  }
+
+  // 2. Render Konteks Makro Ekonomi AS & Geopolitik Safe Haven
+  const mBox = $('#aiMacroGeoBody');
+  if (mBox && rep.macroSentiment) {
+    const ms = rep.macroSentiment;
+    const cats = Array.isArray(rep.macroCatalysts) ? rep.macroCatalysts : [];
+    const sources = Array.isArray(rep.groundingSources) ? rep.groundingSources.slice(0, 4) : [];
+    mBox.innerHTML = `
+      <div class="ai-macro-grid">
+        <div class="ai-macro-box">
+          <div class="ai-mb-tag">🇺🇸 EKONOMI AS &amp; KEBIJAKAN THE FED (FOMC / DXY)</div>
+          <p>${esc(ms.usEconomySummary || '')}</p>
+          ${ms.fedPolicyOutlook ? `<div class="ai-mb-sub"><b>Prospek Suku Bunga &amp; DXY:</b> ${esc(ms.fedPolicyOutlook)}</div>` : ''}
+        </div>
+        <div class="ai-macro-box safe-haven">
+          <div class="ai-mb-tag">🌍 KONFLIK GEOPOLITIK &amp; PERMINTAAN SAFE HAVEN</div>
+          <p>${esc(ms.geopoliticalSafeHaven || '')}</p>
+          ${ms.portfolioImpact ? `<div class="ai-mb-sub"><b>Dampak ke Jurnal Anda:</b> ${esc(ms.portfolioImpact)}</div>` : ''}
+        </div>
+      </div>
+      ${cats.length ? `
+        <div class="ai-cat-section">
+          <div class="ai-exec-title">📡 KATALIS EKSTERNAL UTAMA YANG WAJIB DIPANTAU</div>
+          <div class="ai-cat-list">
+            ${cats.map(c => `
+              <div class="ai-cat-row">
+                <span class="badge ${String(c.impact).toUpperCase() === 'HIGH' ? 'loss' : 'short'}">${esc(c.category || 'MAKRO')}</span>
+                <div class="ai-cat-txt"><b>${esc(c.title || '')}:</b> ${esc(c.summary || '')}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+      ${sources.length ? `
+        <div class="ai-sources-bar">
+          <span class="mono dim" style="font-size:10px">SUMBER DATA EKSTERNAL (LIVE GROUNDING):</span>
+          ${sources.map(s => `<a href="${esc(s.uri)}" target="_blank" rel="noopener noreferrer" class="ai-src-chip">${esc(trunc(s.title || s.uri, 34))} ↗</a>`).join('')}
+        </div>
+      ` : ''}
+    `;
+  }
+
+  // 3. Render Arah Bias Fundamental Major Pairs & XAUUSD
+  const fBox = $('#aiFundamentalBiasBody');
+  if (fBox) {
+    const biases = Array.isArray(rep.pairBiases) ? rep.pairBiases : [];
+    const userPairs = new Set(trades.map(t => (t.asset || '').toUpperCase()));
+    fBox.innerHTML = `<div class="ai-bias-grid">
+      ${biases.map(b => {
+        const pairName = String(b.pair || '').toUpperCase();
+        const rawBias = String(b.bias || 'NEUTRAL').toUpperCase();
+        const isBull = rawBias.includes('BULL') || rawBias.includes('LONG');
+        const isBear = rawBias.includes('BEAR') || rawBias.includes('SHORT');
+        const bCls = isBull ? 'win' : isBear ? 'loss' : 'bee';
+        const arrow = isBull ? '▲ BULLISH' : isBear ? '▼ BEARISH' : '◆ NEUTRAL';
+        const isTraded = userPairs.has(pairName);
+        return `<div class="ai-bias-card ${isBull ? 'bull' : isBear ? 'bear' : 'neut'}${isTraded ? ' traded' : ''}">
+          <div class="ai-bc-top">
+            <div class="ai-bc-pair">
+              <b class="mono">${esc(pairName)}</b>
+              ${isTraded ? `<span class="ai-traded-tag" title="Pair ini tercatat di jurnal Anda">★ Jurnal Anda</span>` : ''}
+            </div>
+            <span class="badge ${bCls}">${arrow}</span>
+          </div>
+          <div class="ai-bc-conv mono">Keyakinan: <b>${esc(b.conviction || 'Moderat')}</b>${b.spotRef ? ` · Ref: ${esc(b.spotRef)}` : ''}</div>
+          <p class="ai-bc-driver">${esc(b.drivers || '')}</p>
+          ${b.keyContext ? `<div class="ai-bc-ctx"><b>Fokus Makro:</b> ${esc(b.keyContext)}</div>` : ''}
+          ${b.userAlignment ? `<div class="ai-bc-align"><b>Evaluasi Posisi Anda:</b> ${esc(b.userAlignment)}</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+}
+
+async function runAiAnalytics(forceRefresh = false) {
+  syncAiGateUI(false);
+  const rawKey = getDecodedAiKey();
+  if (!aiState.verified || !rawKey) return;
+  if (aiState.isRunning) return;
+
+  const arr = pt();
+  const currentHash = `${state.period}:${computeTradesHash(arr)}`;
+  if (!forceRefresh && aiState.lastReport && aiState.lastHash === currentHash) {
+    renderAiReportData(aiState.lastReport);
+    return;
+  }
+
+  aiState.isRunning = true;
+  const runBtn = $('#btnRunAiAnalysis');
+  if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.textContent = '⏳ Menganalisis Catatan & Pasar...';
+  }
+
+  const loadingHtml = `<div class="ai-loading-state"><div class="ai-spinner"></div><div><b>Server AI sedang menyusun laporan...</b><p class="hint">Menganalisis catatan jurnal Anda, arah bias fundamental XAUUSD &amp; Major Pairs, serta berita ekonomi AS &amp; geopolitik terkini.</p></div></div>`;
+  if (!aiState.lastReport || forceRefresh) {
+    if ($('#aiJournalInsightBody')) $('#aiJournalInsightBody').innerHTML = loadingHtml;
+    if ($('#aiMacroGeoBody')) $('#aiMacroGeoBody').innerHTML = loadingHtml;
+    if ($('#aiFundamentalBiasBody')) $('#aiFundamentalBiasBody').innerHTML = loadingHtml;
+  }
+
+  try {
+    const extMarket = await fetchExternalMarketContext();
+    const m = metrics(arr);
+    const eq = calcAccountEquity();
+
+    // Siapkan ringkasan 25 trade terakhir & catatan pengguna secara kompak
+    const recentTradesForPrompt = arr.slice(-25).map((t, idx) => ({
+      no: idx + 1,
+      date: t.date,
+      pair: t.asset,
+      position: t.position,
+      lot: t.lot,
+      entry: t.entry,
+      exit: t.exit,
+      returnPct: +tradeRet(t).toFixed(2),
+      notes: (t.notes || '').trim() || '(Tanpa catatan)'
+    }));
+
+    const todayStr = todayISO();
+    const systemPrompt = `Anda adalah Institutional Forex & Gold (XAUUSD) Quantitative Trading Coach & Global Macro Strategist.
+Tugas Anda adalah memberikan laporan analitik menyeluruh dalam Bahasa Indonesia yang ringkas, tajam, intuitif, dan bebas basa-basi berdasarkan:
+1) Data riwayat trading & teks CATATAN JURNAL (notes) yang diketik oleh trader.
+2) Kondisi fundamental pasar terkini untuk XAUUSD (Gold) dan 6 Major Pairs Forex (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF).
+3) Dinamika ekonomi Amerika Serikat (kebijakan suku bunga The Fed/FOMC, inflasi CPI/PCE, data tenaga kerja NFP, US Treasury Yields, DXY) serta faktor risiko geopolitik global yang memicu lonjakan permintaan aset safe haven (terutama Emas/XAUUSD, USD, JPY, CHF).
+
+Tanggal analisis hari ini: ${todayStr}.
+Referensi Spot Market saat ini (jika tersedia): ${JSON.stringify(extMarket.spotRates || {})}.
+Ringkasan Akun Trader (${periodLabel()}):
+- Saldo Saat Ini: $${eq.currentBalance.toFixed(2)} (Modal Awal: $${eq.initialBalance.toFixed(2)}, Growth: ${eq.growthPct.toFixed(2)}%)
+- Total Trade di Periode Ini: ${m.total} (Win: ${m.wins}, Loss: ${m.losses}, Win Rate: ${(m.winRate || 0).toFixed(1)}%, Avg Return: ${(m.avg || 0).toFixed(2)}%, Max Drawdown: ${(m.maxDD || 0).toFixed(2)}%)
+- Daftar Trade & Catatan Jurnal Pengguna:
+${JSON.stringify(recentTradesForPrompt)}
+
+Kembalikan HANYA objek JSON valid (tanpa markdown blok kode tambahan jika memungkinkan) dengan struktur persis berikut:
+{
+  "disciplineScore": 80,
+  "scoreLabel": "80/100 · Disiplin Terjaga",
+  "executiveSummary": "Ringkasan tajam 2-3 kalimat yang mengevaluasi pola catatan jurnal trader, kualitas eksekusi, dan psikologi tradingnya (jika belum ada trade, berikan panduan cara menulis jurnal yang efektif).",
+  "noteInsights": [
+    {
+      "title": "Judul Temuan dari Catatan Jurnal",
+      "badge": "POLA CATATAN / PSIKOLOGI / EKSEKUSI",
+      "tone": "pos",
+      "detail": "Penjelasan spesifik dan intuitif mengacu langsung pada isi catatan yang ditulis trader (misal alasan entry, emosi, konfirmasi teknikal, atau ketiadaan catatan pada trade tertentu)."
+    },
+    {
+      "title": "Evaluasi Manajemen Risiko & Lot",
+      "badge": "RISK & LOT SIZING",
+      "tone": "warn",
+      "detail": "Evaluasi konsistensi lot, rasio win/loss, dan kepatuhan rencana."
+    },
+    {
+      "title": "Korelasi Waktu & Pair Terbaik",
+      "badge": "OPTIMASI PAIR",
+      "tone": "pos",
+      "detail": "Wawasan mengenai performa pair utama di jurnal trader."
+    }
+  ],
+  "actionPlan": [
+    "Langkah konkret 1 yang harus dilakukan trader pada sesi trading berikutnya",
+    "Langkah konkret 2 untuk meningkatkan kualitas catatan & disiplin eksekusi",
+    "Langkah konkret 3 terkait antisipasi volatilitas pasar"
+  ],
+  "macroSentiment": {
+    "regime": "RISK-OFF / SAFE HAVEN FLOW atau MIXED / DATA DEPENDENT atau RISK-ON",
+    "usEconomySummary": "Analisis ringkas kondisi ekonomi Amerika Serikat terkini (inflasi AS, tenaga kerja NFP, pertumbuhan GDP, dan kekuatan indeks Dolar AS / DXY).",
+    "fedPolicyOutlook": "Prospek suku bunga The Fed (FOMC) dan imbal hasil US Treasury terhadap pasangan mata uang.",
+    "geopoliticalSafeHaven": "Analisis dampak ketidakpastian konflik geopolitik global terkini terhadap lonjakan permintaan aset safe haven (XAUUSD/Emas, USD, JPY, CHF).",
+    "portfolioImpact": "Bagaimana kondisi ekonomi AS & geopolitik saat ini berdampak langsung pada pair yang paling sering ditradingkan pengguna di jurnalnya."
+  },
+  "macroCatalysts": [
+    {
+      "category": "EKONOMI AS / THE FED",
+      "title": "Kebijakan Suku Bunga The Fed & Data Inflasi/Tenaga Kerja AS",
+      "impact": "HIGH",
+      "summary": "Penjelasan ringkas dampak rilis data AS terhadap volatilitas USD dan XAUUSD."
+    },
+    {
+      "category": "GEOPOLITIK / SAFE HAVEN",
+      "title": "Ketidakpastian Konflik Geopolitik & Permintaan Emas",
+      "impact": "HIGH",
+      "summary": "Penjelasan bagaimana ketegangan geopolitik memicu aliran modal ke aset safe haven."
+    },
+    {
+      "category": "SENTIMEN YIELD & DXY",
+      "title": "Pergerakan Imbal Hasil US Treasury 10Y & Indeks Dolar",
+      "impact": "MEDIUM",
+      "summary": "Dampak pergerakan yield obligasi AS terhadap major pairs."
+    }
+  ],
+  "pairBiases": [
+    {
+      "pair": "XAUUSD",
+      "bias": "BULLISH",
+      "conviction": "Tinggi",
+      "spotRef": "Gold / Safe Haven",
+      "drivers": "Alasan fundamental utama XAUUSD (permintaan safe haven akibat ketegangan geopolitik, pembelian bank sentral, dan ekspektasi suku bunga riil AS).",
+      "keyContext": "Waspadai volatilitas tinggi saat rilis data CPI/NFP AS dan pidato pejabat The Fed.",
+      "userAlignment": "Evaluasi singkat apakah riwayat posisi XAUUSD di jurnal trader sudah searah dengan bias fundamental ini."
+    },
+    {
+      "pair": "EURUSD",
+      "bias": "BEARISH",
+      "conviction": "Moderat",
+      "spotRef": "${extMarket.spotRates?.EURUSD || 'Major'}",
+      "drivers": "Divergensi pertumbuhan ekonomi Zona Euro vs ketahanan ekonomi AS serta kebijakan ECB vs The Fed.",
+      "keyContext": "Pantau rilis inflasi Eurozone dan indeks DXY.",
+      "userAlignment": "Panduan posisi untuk trader pada EURUSD."
+    },
+    {
+      "pair": "GBPUSD",
+      "bias": "NEUTRAL",
+      "conviction": "Moderat",
+      "spotRef": "${extMarket.spotRates?.GBPUSD || 'Major'}",
+      "drivers": "Kebijakan suku bunga Bank of England (BoE) yang hati-hati terhadap inflasi jasa Inggris vs dinamika USD.",
+      "keyContext": "Perhatikan data ketenagakerjaan & CPI Inggris.",
+      "userAlignment": "Panduan posisi untuk trader pada GBPUSD."
+    },
+    {
+      "pair": "USDJPY",
+      "bias": "BULLISH",
+      "conviction": "Moderat",
+      "spotRef": "${extMarket.spotRates?.USDJPY || 'Major'}",
+      "drivers": "Selisih imbal hasil (yield differential) US Treasury vs obligasi Jepang (JGB), dengan risiko intervensi/safe haven JPY saat eskalasi geopolitik.",
+      "keyContext": "Sensitif terhadap imbal hasil obligasi AS 10-tahun dan pernyataan BoJ.",
+      "userAlignment": "Panduan posisi untuk trader pada USDJPY."
+    },
+    {
+      "pair": "AUDUSD",
+      "bias": "NEUTRAL",
+      "conviction": "Moderat",
+      "spotRef": "${extMarket.spotRates?.AUDUSD || 'Major'}",
+      "drivers": "Dipengaruhi sentimen risiko global (risk-on/risk-off), prospek ekonomi Tiongkok, dan kebijakan RBA.",
+      "keyContext": "Rentan tertekan jika ketegangan geopolitik memicu sentimen risk-off.",
+      "userAlignment": "Panduan posisi untuk trader pada AUDUSD."
+    },
+    {
+      "pair": "USDCAD",
+      "bias": "BULLISH",
+      "conviction": "Moderat",
+      "spotRef": "${extMarket.spotRates?.USDCAD || 'Major'}",
+      "drivers": "Perbedaan siklus pemangkasan suku bunga Bank of Canada (BoC) dibanding The Fed serta fluktuasi harga minyak mentah.",
+      "keyContext": "Perhatikan korelasi harga minyak WTI dan data ketenagakerjaan AS/Kanada.",
+      "userAlignment": "Panduan posisi untuk trader pada USDCAD."
+    },
+    {
+      "pair": "USDCHF",
+      "bias": "BEARISH",
+      "conviction": "Moderat",
+      "spotRef": "${extMarket.spotRates?.USDCHF || 'Major'}",
+      "drivers": "Franc Swiss (CHF) mendapat dukungan arus safe haven Eropa saat ketidakpastian geopolitik meningkat, diimbangi kebijakan SNB.",
+      "keyContext": "Berperan sebagai barometer lindung nilai risiko geopolitik bersama XAUUSD.",
+      "userAlignment": "Panduan posisi untuk trader pada USDCHF."
+    }
+  ]
+}`;
+
+    let rawText = '';
+    let groundingSources = [];
+
+    if (aiState.provider === 'openai') {
+      const oRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + rawKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: aiState.model || 'gpt-4o-mini',
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: 'You are an institutional Forex & Gold macro analyst and trading coach. Always output valid JSON.' },
+            { role: 'user', content: systemPrompt }
+          ],
+          temperature: 0.35
+        })
+      });
+      if (!oRes.ok) {
+        const errData = await oRes.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || `OpenAI HTTP ${oRes.status}`);
+      }
+      const oJson = await oRes.json();
+      rawText = oJson?.choices?.[0]?.message?.content || '';
+    } else {
+      // Google Gemini API: Single-pass Direct Structured JSON Mode (cepat tanpa latency ganda google_search)
+      const tryModels = [];
+      const addModel = m => { if (m && m !== 'gemini-2.5-flash' && !tryModels.includes(m)) tryModels.push(m); };
+      if (aiState.model && aiState.model !== 'gemini-2.5-flash') addModel(aiState.model);
+      addModel('gemini-3.8-flash');
+      if (Array.isArray(aiState.availableModels) && aiState.availableModels.length) {
+        rankGeminiModels(aiState.availableModels).forEach(addModel);
+      }
+      GEMINI_PREFERRED_MODELS.forEach(addModel);
+
+      let gJson = null;
+      let usedModel = null;
+      let lastGeminiErr = 'Gagal menghubungi Gemini API.';
+
+      for (const candidate of tryModels.slice(0, 5)) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(rawKey)}`;
+
+        const gRes = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: getGeminiHeaders(rawKey, true),
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            generationConfig: {
+              temperature: 0.25,
+              maxOutputTokens: 2048,
+              responseMimeType: 'application/json'
+            }
+          })
+        }, 20000);
+
+        if (gRes.ok) {
+          gJson = await gRes.json();
+          usedModel = candidate;
+          break;
+        }
+
+        const errData = await gRes.json().catch(() => ({}));
+        lastGeminiErr = errData?.error?.message || `Gemini HTTP ${gRes.status}`;
+        if (gRes.status === 401 || gRes.status === 403 || /API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
+          throw new Error(lastGeminiErr);
+        }
+        const isModelUnavailable = gRes.status === 404 || /no longer available|not found|not supported for generateContent|deprecated/i.test(lastGeminiErr);
+        if (!isModelUnavailable) {
+          throw new Error(lastGeminiErr);
+        }
+      }
+
+      if (!gJson || !usedModel) {
+        throw new Error(lastGeminiErr);
+      }
+
+      if (aiState.model !== usedModel) {
+        aiState.model = usedModel;
+        saveAiConfig();
+        syncAiGateUI(false);
+      }
+
+      const cand = gJson?.candidates?.[0];
+      rawText = (cand?.content?.parts || []).map(p => p.text || '').join('\n');
+
+      // Ekstrak sumber web grounding jika ada
+      const chunks = cand?.groundingMetadata?.groundingChunks || [];
+      chunks.forEach(ch => {
+        if (ch?.web?.uri) {
+          groundingSources.push({ title: ch.web.title || ch.web.uri, uri: ch.web.uri });
+        }
+      });
+    }
+
+    // Parse JSON dari respons AI
+    const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace === -1) {
+      throw new Error('Format respons AI tidak valid. Silakan klik Perbarui Analisis.');
+    }
+    const parsedReport = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    parsedReport.generatedAt = Date.now();
+    if (groundingSources.length) {
+      parsedReport.groundingSources = groundingSources;
+    }
+
+    aiState.lastReport = parsedReport;
+    aiState.lastHash = currentHash;
+    saveAiConfig();
+    renderAiReportData(parsedReport);
+    if (forceRefresh) toast('Analisis AI berhasil diperbarui');
+  } catch (err) {
+    console.error('AI Analytics error:', err);
+    toast('Gagal menjalankan Analitik AI: ' + (err.message || 'Periksa API Key / kuota'), 'err');
+    if (aiState.lastReport) {
+      renderAiReportData(aiState.lastReport);
+    } else {
+      renderLockedPreviewPlaceholders();
+    }
+  } finally {
+    aiState.isRunning = false;
+    if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.textContent = '✨ Perbarui Analisis AI Sekarang';
+    }
+  }
+}
+
+function renderAiPage() {
+  syncAiGateUI(false);
+  if (aiState.verified && getDecodedAiKey()) {
+    if (aiState.lastReport) {
+      renderAiReportData(aiState.lastReport);
+    }
+    runAiAnalytics(false);
+  }
+}
+
+// Event Listeners untuk Analitik AI
+if ($('#aiProviderSelect')) {
+  $('#aiProviderSelect').addEventListener('change', e => {
+    const p = e.target.value;
+    const inp = $('#aiApiKeyInput');
+    const help = $('#aiKeyHelpLink');
+    if (p === 'openai') {
+      if (inp) inp.placeholder = 'Masukkan OpenAI API Key (contoh: sk-proj-...)';
+      if (help) {
+        help.href = 'https://platform.openai.com/api-keys';
+        help.textContent = '⚡ Buka OpenAI API Keys ↗';
+      }
+    } else {
+      if (inp) inp.placeholder = 'Masukkan Gemini API Key (contoh: AIzaSy...)';
+      if (help) {
+        help.href = 'https://aistudio.google.com/app/apikey';
+        help.textContent = '⚡ Dapatkan Gemini API Key Gratis ↗';
+      }
+    }
+    setAiConnStatus('', '');
+  });
+}
+
+if ($('#btnToggleAiKey')) {
+  $('#btnToggleAiKey').onclick = () => {
+    const inp = $('#aiApiKeyInput');
+    if (!inp) return;
+    const isPass = inp.type === 'password';
+    inp.type = isPass ? 'text' : 'password';
+    $('#btnToggleAiKey').textContent = isPass ? 'Sembunyi' : 'Lihat';
+  };
+}
+
+if ($('#btnVerifyAiKey')) {
+  $('#btnVerifyAiKey').onclick = async () => {
+    const prov = $('#aiProviderSelect')?.value || 'gemini';
+    const rawKey = ($('#aiApiKeyInput')?.value || '').trim();
+    const btn = $('#btnVerifyAiKey');
+
+    if (!rawKey) {
+      setAiConnStatus('err', '⚠ <b>API Key Kosong:</b> Silakan masukkan API Key Anda terlebih dahulu.');
+      $('#aiApiKeyInput')?.focus();
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Memverifikasi ke Server AI...';
+    setAiConnStatus('info', '🔌 Menghubungi server AI dan memverifikasi keaslian API Key...');
+
+    const res = await verifyAiServerConnection(prov, rawKey);
+    btn.disabled = false;
+    btn.textContent = '🔌 Verifikasi Koneksi & Buka Analitik AI';
+
+    if (!res.ok) {
+      setAiConnStatus('err', `✖ <b>Verifikasi Gagal:</b> ${esc(res.error)}`);
+      toast('Verifikasi API Key gagal', 'err');
+      return;
+    }
+
+    aiState.provider = prov;
+    aiState.apiKeyB64 = btoa(unescape(encodeURIComponent(rawKey)));
+    aiState.verified = true;
+    aiState.model = res.model;
+    aiState.verifiedAt = Date.now();
+    saveAiConfig();
+
+    setAiConnStatus('ok', `✔ <b>Terhubung ke ${esc(res.serverLabel)}</b> · Model aktif: <b class="mono">${esc(res.model)}</b>`);
+    toast(`API Key terverifikasi (${res.model}) — Membuka Analitik AI`);
+
+    setAiConnStatus('', '');
+    syncAiGateUI(false);
+    runAiAnalytics(true);
+  };
+}
+
+if ($('#btnManageAiKey')) {
+  $('#btnManageAiKey').onclick = () => {
+    setAiConnStatus('ok', `✔ <b>Status Saat Ini:</b> Terhubung ke <span class="mono">${esc(aiState.model)}</span>. Anda dapat mengganti API Key di atas.`);
+    syncAiGateUI(true);
+  };
+}
+
+if ($('#btnCancelAiGate')) {
+  $('#btnCancelAiGate').onclick = () => {
+    setAiConnStatus('', '');
+    syncAiGateUI(false);
+  };
+}
+
+if ($('#btnDisconnectAiKey')) {
+  $('#btnDisconnectAiKey').onclick = async () => {
+    const ok = await confirmBox({
+      title: 'Putuskan & Kunci Analitik AI?',
+      msg: 'API Key Anda akan dihapus dari perangkat ini dan halaman Analitik AI akan dikunci kembali hingga Anda memverifikasi API Key baru.',
+      ok: 'Ya, Kunci AI'
+    });
+    if (!ok) return;
+    aiState.apiKeyB64 = '';
+    aiState.verified = false;
+    aiState.lastReport = null;
+    aiState.lastHash = '';
+    saveAiConfig();
+    if ($('#aiApiKeyInput')) $('#aiApiKeyInput').value = '';
+    setAiConnStatus('', '');
+    syncAiGateUI(true);
+    toast('API Key dihapus & Analitik AI dikunci');
+  };
+}
+
+if ($('#btnRunAiAnalysis')) {
+  $('#btnRunAiAnalysis').onclick = () => runAiAnalytics(true);
+}
+
 /* ================= navigasi & periode ================= */
 function setPageMeta() {
   const t = {
     overview: ['Ringkasan Performa', `Pertumbuhan akun & konsistensi — ${periodLabel()}`],
     journal: ['Jurnal Trading', 'Catat, validasi, dan evaluasi setiap trade'],
     sizing: ['Position Sizing', 'Kalkulator ukuran lot ideal sesuai modal, batas risiko, dan jarak Stop Loss'],
-    analytics: ['Analitik', `Pola performa, drawdown & perbandingan posisi — ${periodLabel()}`]
-  }[state.page];
+    analytics: ['Analitik', `Pola performa, drawdown & perbandingan posisi — ${periodLabel()}`],
+    ai: ['Analitik AI', `Wawasan catatan jurnal, bias fundamental XAUUSD & major pairs, serta makro ekonomi AS & geopolitik — ${periodLabel()}`]
+  }[state.page] || ['Ringkasan Performa', ''];
   $('#pageTitle').textContent = t[0]; $('#pageSub').textContent = t[1];
   $('#periodWrap').hidden = (state.page === 'journal' || state.page === 'sizing');
 }
@@ -3021,12 +3913,17 @@ function renderAll() {
   if (state.page === 'overview') renderOverview();
   else if (state.page === 'sizing') renderPositionSizing();
   else if (state.page === 'analytics') renderAnalytics();
+  else if (state.page === 'ai') renderAiPage();
   requestAnimationFrame(() => {
     if (state.page === 'overview') syncRecentHeight();
     else if (state.page === 'journal') syncJournalHeight();
   });
 }
 function go(page) {
+  if (page === 'ai' && window.innerWidth <= 920) {
+    toast('Fitur Analitik AI khusus untuk tampilan Laptop / Desktop', 'err');
+    return;
+  }
   if (state.page === page) return; // Jangan re-render jika sudah di halaman yang sama (mencegah animasi berulang saat sentuh nav di HP)
   state.page = page;
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
@@ -3106,6 +4003,10 @@ tickClock(); setInterval(tickClock, 1000);
 
 let lastInnerWidth = window.innerWidth;
 window.addEventListener('resize', debounce(() => {
+  if (window.innerWidth <= 920 && state.page === 'ai') {
+    go('overview');
+    return;
+  }
   // Abaikan event resize jika perubahan lebar layar kurang dari 20px (misal: saat scroll di HP yang menyebabkan address bar muncul/hilang atau scrollbar toggle)
   if (Math.abs(window.innerWidth - lastInnerWidth) < 20) return;
   lastInnerWidth = window.innerWidth;
@@ -3123,6 +4024,7 @@ window.addEventListener('resize', debounce(() => {
 /* ---- init ---- */
 $('#fDate').value = todayISO();
 loadPsSettings();
+loadAiConfig();
 populateAssetSelect('XAUUSD');
 syncPsUI();
 renderPositionSizing();

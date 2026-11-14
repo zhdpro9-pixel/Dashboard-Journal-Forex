@@ -16,7 +16,7 @@
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
     rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="style.css?v=20261106c">
+  <link rel="stylesheet" href="style.css?v=20261114d">
 </head>
 
 <body>
@@ -59,6 +59,11 @@
             <path d="M3 3v18h18" />
             <path d="M7 14l4-4 3 3 6-7" />
           </svg>Analitik</button>
+        <button class="nav-item nav-ai-desktop" data-page="ai" id="navAiBtn"><svg width="17" height="17"
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round">
+            <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8L12 2z" />
+          </svg>Analitik AI<span class="chip chip-ai">AI</span></button>
       </nav>
       <div class="nav-label">Data</div>
       <div class="side-tools">
@@ -352,7 +357,8 @@
                     <input type="number" id="psBalance" step="any" min="1" value="1000" placeholder="1000"
                       inputmode="decimal">
                     <div class="ps-presets" id="psBalPresets">
-                      <button type="button" class="ps-chip" data-bal="equity" id="psChipEquity">⚡ Saldo Saat Ini</button>
+                      <button type="button" class="ps-chip" data-bal="equity" id="psChipEquity">⚡ Saldo Saat
+                        Ini</button>
                       <button type="button" class="ps-chip" data-bal="100">$100</button>
                       <button type="button" class="ps-chip" data-bal="500">$500</button>
                       <button type="button" class="ps-chip active" data-bal="1000">$1K</button>
@@ -591,6 +597,140 @@
           </div>
         </div>
       </section>
+
+      <!-- ========== PAGE: ANALITIK AI (DESKTOP / LAPTOP ONLY) ========== -->
+      <section class="page" id="page-ai">
+        <div class="ai-stage locked" id="aiStage">
+
+          <!-- POPUP GATE: VERIFIKASI API KEY DENGAN BACKGROUND BLUR -->
+          <div class="ai-gate-overlay" id="aiGateOverlay">
+            <div class="ai-gate-card">
+              <div class="ai-gate-badge">🔒 AUTENTIKASI SERVER AI WAJIB</div>
+              <h2 class="ai-gate-title">Hubungkan API Key — Analitik AI</h2>
+              <p class="ai-gate-sub">
+                Fitur <b>Analitik AI</b> memerlukan API Key pribadi Anda. Sistem akan memverifikasi koneksi langsung ke
+                server AI sebelum membuka akses ke evaluasi catatan jurnal, bias fundamental major pair &amp; XAUUSD,
+                serta konteks ekonomi AS &amp; geopolitik terkini.
+              </p>
+
+              <div class="ai-gate-field">
+                <div class="ps-label-row">
+                  <label for="aiProviderSelect">Server Penyedia AI</label>
+                  <span class="mono dim" style="font-size:10.5px">Live Grounding &amp; Macro Feed</span>
+                </div>
+                <select id="aiProviderSelect">
+                  <option value="gemini">Google Gemini AI Server</option>
+                  <option value="openai">OpenAI Server</option>
+                </select>
+              </div>
+
+              <div class="ai-gate-field">
+                <div class="ps-label-row">
+                  <label for="aiApiKeyInput">Masukkan API Key Pribadi Anda *</label>
+                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
+                    class="lot-calc-link" id="aiKeyHelpLink">⚡ Dapatkan Gemini API Key Gratis ↗</a>
+                </div>
+                <div class="pass-wrap">
+                  <input type="password" id="aiApiKeyInput" placeholder="Masukkan API Key (contoh: AIzaSy...)"
+                    autocomplete="off" spellcheck="false" style="font-family:var(--font-m)">
+                  <button type="button" class="pass-toggle" id="btnToggleAiKey">Lihat</button>
+                </div>
+              </div>
+
+              <div class="ai-conn-status" id="aiConnStatus" hidden></div>
+
+              <div class="ai-gate-actions">
+                <button type="button" class="btn primary" id="btnVerifyAiKey"
+                  style="width:100%;justify-content:center;height:40px">
+                  🔌 Verifikasi Koneksi &amp; Buka Analitik AI
+                </button>
+                <button type="button" class="btn ghost" id="btnCancelAiGate" hidden
+                  style="width:100%;justify-content:center">
+                  Kembali ke Analitik AI
+                </button>
+              </div>
+
+              <div class="ai-gate-foot">
+                <span>🛡️ <b>Privasi Terjamin:</b> API Key disimpan terenkripsi lokal di perangkat Anda &amp; hanya
+                  dikirim langsung ke endpoint resmi server AI saat verifikasi dan analisis.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- WORKSPACE UTAMA ANALITIK AI (TERKUNCI & BLUR JIKA BELUM ADA API KEY TERVERIFIKASI) -->
+          <div class="ai-workspace" id="aiWorkspace">
+
+            <!-- Bar Kontrol & Status Koneksi Server AI -->
+            <div class="ai-control-strip">
+              <div class="ai-cs-left">
+                <div class="ai-server-pill" id="aiServerPill">
+                  <span class="ai-dot" id="aiServerDot"></span>
+                  <span id="aiServerText">Server AI: Belum Terhubung</span>
+                </div>
+                <div class="ai-scope-info" id="aiScopeInfo">
+                  Cakupan: Catatan Jurnal Trading + Fundamental Major Pairs &amp; XAUUSD + Ekonomi AS &amp; Geopolitik
+                </div>
+              </div>
+              <div class="ai-cs-right">
+                <button type="button" class="btn sm ghost" id="btnManageAiKey" title="Ubah atau putuskan API Key">
+                  🔑 Pengaturan API Key
+                </button>
+                <button type="button" class="btn sm danger" id="btnDisconnectAiKey" title="Putuskan &amp; Kunci AI">
+                  🔒 Kunci AI
+                </button>
+                <button type="button" class="btn sm primary" id="btnRunAiAnalysis">
+                  ✨ Perbarui Analisis AI Sekarang
+                </button>
+              </div>
+            </div>
+
+            <!-- Baris Atas: 1. Analisis Catatan & Insight + 3. Integrasi Data Eksternal (Ekonomi AS & Geopolitik) -->
+            <div class="grid g2 ai-top-grid">
+
+              <!-- PILAR 1: ANALISIS CATATAN & INSIGHT -->
+              <section class="card reveal ai-card">
+                <div class="card-h">
+                  <div>
+                    <h3>1. Analisis Catatan Jurnal &amp; Insight Perilaku</h3>
+                    <p class="hint">Evaluasi otomatis pola eksekusi, disiplin, dan psikologi dari catatan trading Anda
+                    </p>
+                  </div>
+                  <span class="badge win" id="aiScoreBadge">Skor Disiplin: —</span>
+                </div>
+                <div class="card-b" id="aiJournalInsightBody"></div>
+              </section>
+
+              <!-- PILAR 3: INTEGRASI DATA EKSTERNAL (EKONOMI AS & SAFE HAVEN GEOPOLITIK) -->
+              <section class="card reveal ai-card" style="--d:40ms">
+                <div class="card-h">
+                  <div>
+                    <h3>2. Konteks Makro Ekonomi AS &amp; Geopolitik Safe Haven</h3>
+                    <p class="hint">Kebijakan The Fed, data ekonomi AS (CPI/NFP/DXY), &amp; arus safe haven konflik
+                      geopolitik</p>
+                  </div>
+                  <span class="badge short" id="aiRegimeBadge">Sentimen: —</span>
+                </div>
+                <div class="card-b" id="aiMacroGeoBody"></div>
+              </section>
+
+            </div>
+
+            <!-- Baris Bawah: PILAR 2: INFORMASI FUNDAMENTAL & BIAS PASAR (XAUUSD & MAJOR PAIRS) -->
+            <section class="card reveal ai-card" style="--d:80ms">
+              <div class="card-h">
+                <div>
+                  <h3>3. Arah Bias Fundamental — XAUUSD (Gold) &amp; Major Pairs Forex</h3>
+                  <p class="hint">Panduan arah bias fundamental, pemicu makro utama, dan keselarasan dengan riwayat pair
+                    jurnal Anda</p>
+                </div>
+                <span class="mono dim" id="aiLastUpdatedText" style="font-size:11px">Belum dianalisis</span>
+              </div>
+              <div class="card-b" id="aiFundamentalBiasBody"></div>
+            </section>
+
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -599,7 +739,7 @@
   <div id="modalRoot"></div>
   <div id="authGate" class="auth-gate" hidden></div>
 
-  <script src="script.js?v=20261106c"></script>
+  <script src="script.js?v=20261114d"></script>
 </body>
 
 </html>
