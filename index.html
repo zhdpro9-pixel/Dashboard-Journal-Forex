@@ -9,14 +9,27 @@
   <meta http-equiv="Expires" content="0">
   <title>Trading Journey — Performance Dashboard</title>
   <link rel="icon"
-    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='8' width='5' height='9' rx='1' fill='%2316c784'/%3E%3Crect x='14' y='5' width='5' height='8' rx='1' fill='%23f6465d'/%3E%3C/svg%3E">
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='8' width='5' height='9' rx='1' fill='%233fb68b'/%3E%3Crect x='14' y='5' width='5' height='8' rx='1' fill='%23e5646f'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
     rel="stylesheet">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('tjd.ui.theme');
+        if (t === 'light' || t === 'dark') {
+          document.documentElement.setAttribute('data-theme', t);
+        } else {
+          var isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+          document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
+        }
+      } catch (_) {}
+    })();
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="style.css?v=20261115d">
+  <link rel="stylesheet" href="style.css?v=20261115n">
 </head>
 
 <body>
@@ -25,43 +38,43 @@
     <!-- ================= SIDEBAR ================= -->
     <aside class="sidebar">
       <div class="brand">
-        <svg viewBox="0 0 24 24" width="30" height="30">
-          <rect x="1" y="1" width="22" height="22" rx="6" fill="#E8B84B" opacity=".13" stroke="#E8B84B"
+        <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+          <rect x="1" y="1" width="22" height="22" rx="6" fill="var(--accent)" opacity=".14" stroke="var(--accent)"
             stroke-opacity=".45" />
-          <path d="M8 5.5v3M8 14.5v4" stroke="#16c784" stroke-width="1.6" stroke-linecap="round" />
-          <rect x="6.1" y="8.5" width="3.8" height="6" rx="1.1" fill="#16c784" />
-          <path d="M16 4.5v3M16 12.5v6" stroke="#f6465d" stroke-width="1.6" stroke-linecap="round" />
-          <rect x="14.1" y="7.5" width="3.8" height="5" rx="1.1" fill="#f6465d" />
+          <path d="M8 5.5v3M8 14.5v4" stroke="var(--green)" stroke-width="1.6" stroke-linecap="round" />
+          <rect x="6.1" y="8.5" width="3.8" height="6" rx="1.1" fill="var(--green)" />
+          <path d="M16 4.5v3M16 12.5v6" stroke="var(--red)" stroke-width="1.6" stroke-linecap="round" />
+          <rect x="14.1" y="7.5" width="3.8" height="5" rx="1.1" fill="var(--red)" />
         </svg>
         <div><b>Trading Journey</b><span>Performance Dashboard</span></div>
       </div>
-      <nav>
+      <nav role="tablist" aria-label="Navigasi utama">
         <div class="nav-label">Menu</div>
-        <button class="nav-item active" data-page="overview"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <button type="button" class="nav-item active" data-page="overview" role="tab" aria-selected="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
             <rect x="3" y="3" width="7" height="9" rx="1.5" />
             <rect x="14" y="3" width="7" height="5" rx="1.5" />
             <rect x="14" y="12" width="7" height="9" rx="1.5" />
             <rect x="3" y="16" width="7" height="5" rx="1.5" />
           </svg>Ringkasan</button>
-        <button class="nav-item" data-page="journal"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button type="button" class="nav-item" data-page="journal" role="tab" aria-selected="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
           </svg>Jurnal Trading<span class="chip" id="navCount">0</span></button>
-        <button class="nav-item" data-page="sizing"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button type="button" class="nav-item" data-page="sizing" role="tab" aria-selected="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             <path d="M9 12l2 2 4-4" />
           </svg>Position Sizing</button>
-        <button class="nav-item" data-page="analytics"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <button type="button" class="nav-item" data-page="analytics" role="tab" aria-selected="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
             <path d="M3 3v18h18" />
             <path d="M7 14l4-4 3 3 6-7" />
           </svg>Analitik</button>
-        <button class="nav-item nav-ai-desktop" data-page="ai" id="navAiBtn"><svg width="17" height="17"
+        <button type="button" class="nav-item nav-ai-desktop" data-page="ai" id="navAiBtn" role="tab" aria-selected="false"><svg width="17" height="17"
             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-            stroke-linejoin="round">
+            stroke-linejoin="round" aria-hidden="true">
             <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8L12 2z" />
           </svg>Analitik AI<span class="chip chip-ai">AI</span></button>
       </nav>
@@ -71,7 +84,6 @@
         <button class="tool" id="btnInfo">Info Metrik &amp; Penyimpanan</button>
         <button class="tool danger" id="btnClearAll">Hapus Semua Data</button>
       </div>
-      <div class="side-foot"><span class="pulse"></span>Tersimpan otomatis · localStorage</div>
     </aside>
 
     <!-- ================= MAIN ================= -->
@@ -83,28 +95,31 @@
         </div>
         <div class="top-right">
           <div class="period-wrap" id="periodWrap">
-            <div class="seg" id="periodSeg">
-              <button data-p="all" class="active">All Time</button>
-              <button data-p="7d">7D</button>
-              <button data-p="30d">30D</button>
-              <button data-p="90d">90D</button>
-              <button data-p="custom">Custom ▾</button>
+            <div class="seg" id="periodSeg" role="group" aria-label="Rentang waktu performa">
+              <button type="button" data-p="all" class="active" aria-pressed="true">All Time</button>
+              <button type="button" data-p="7d" aria-pressed="false">7D</button>
+              <button type="button" data-p="30d" aria-pressed="false">30D</button>
+              <button type="button" data-p="90d" aria-pressed="false">90D</button>
+              <button type="button" data-p="custom" aria-pressed="false" aria-expanded="false">Custom ▾</button>
             </div>
             <div class="pop" id="customPop" hidden>
-              <input type="date" id="cpFrom" title="Dari tanggal">
-              <span class="dim">→</span>
-              <input type="date" id="cpTo" title="Sampai tanggal">
-              <button class="btn sm primary" id="btnApplyRange">Terapkan</button>
+              <input type="date" id="cpFrom" title="Dari tanggal" aria-label="Dari tanggal">
+              <span class="mut" aria-hidden="true">→</span>
+              <input type="date" id="cpTo" title="Sampai tanggal" aria-label="Sampai tanggal">
+              <button type="button" class="btn sm primary" id="btnApplyRange">Terapkan</button>
             </div>
           </div>
-          <button class="btn sm ghost" id="btnAuth"
+          <button type="button" class="btn sm ghost btn-theme" id="btnThemeToggle"
+            aria-label="Ganti tema tampilan Gelap atau Terang" aria-pressed="false"
+            title="Ubah tema Gelap / Terang">🌙 Gelap</button>
+          <button type="button" class="btn sm ghost" id="btnAuth"
             style="border-color:var(--line2);display:inline-flex;align-items:center;gap:7px"
             title="Akun, PIN &amp; Sinkronisasi Cloud">
             <span id="authDot"
-              style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block"></span>
+              style="width:7px;height:7px;border-radius:50%;background:var(--dim);display:inline-block"></span>
             <span id="authStatusText">Akun &amp; PIN</span>
           </button>
-          <button class="btn primary sm" id="btnQuickAdd">+ Trade</button>
+          <button type="button" class="btn primary sm" id="btnQuickAdd">+ Trade</button>
           <div class="clock" id="clock">—</div>
         </div>
       </header>
@@ -115,15 +130,15 @@
       <section class="page active" id="page-overview">
         <div class="equity-strip" id="equityStrip"></div>
         <div class="empty-hero reveal" id="ovEmpty" hidden>
-          <svg width="150" height="62" viewBox="0 0 150 62" fill="none">
-            <path d="M15 8v14M15 40v14" stroke="#3a4356" stroke-width="2" stroke-linecap="round" />
-            <rect x="9" y="20" width="12" height="20" rx="2" fill="#2b5c49" />
-            <path d="M50 4v10M50 34v20" stroke="#3a4356" stroke-width="2" stroke-linecap="round" />
-            <rect x="44" y="12" width="12" height="22" rx="2" fill="#16c784" opacity=".8" />
-            <path d="M85 10v12M85 44v10" stroke="#3a4356" stroke-width="2" stroke-linecap="round" />
-            <rect x="79" y="20" width="12" height="24" rx="2" fill="#f6465d" opacity=".7" />
-            <path d="M120 6v12M120 38v16" stroke="#3a4356" stroke-width="2" stroke-linecap="round" />
-            <rect x="114" y="16" width="12" height="22" rx="2" fill="#16c784" opacity=".8" />
+          <svg width="150" height="62" viewBox="0 0 150 62" fill="none" aria-hidden="true">
+            <path d="M15 8v14M15 40v14" stroke="var(--line2)" stroke-width="2" stroke-linecap="round" />
+            <rect x="9" y="20" width="12" height="20" rx="2" fill="var(--green)" opacity=".45" />
+            <path d="M50 4v10M50 34v20" stroke="var(--line2)" stroke-width="2" stroke-linecap="round" />
+            <rect x="44" y="12" width="12" height="22" rx="2" fill="var(--green)" opacity=".8" />
+            <path d="M85 10v12M85 44v10" stroke="var(--line2)" stroke-width="2" stroke-linecap="round" />
+            <rect x="79" y="20" width="12" height="24" rx="2" fill="var(--red)" opacity=".75" />
+            <path d="M120 6v12M120 38v16" stroke="var(--line2)" stroke-width="2" stroke-linecap="round" />
+            <rect x="114" y="16" width="12" height="22" rx="2" fill="var(--green)" opacity=".8" />
           </svg>
           <h2>Mulai Perjalanan Trading-mu</h2>
           <p>Belum ada trade tersimpan. Catat trade pertamamu — entry, exit, dan jurnal akan dihitung otomatis menjadi
@@ -153,9 +168,9 @@
                   <h3>Pertumbuhan Kumulatif</h3>
                   <p class="hint" id="cumHint"></p>
                 </div>
-                <div class="seg" id="cumSeg">
-                  <button data-m="comp" class="active">Compounded</button>
-                  <button data-m="simple">Simple</button>
+                <div class="seg" id="cumSeg" role="group" aria-label="Metode akumulasi pertumbuhan">
+                  <button type="button" data-m="comp" class="active" aria-pressed="true">Compounded</button>
+                  <button type="button" data-m="simple" aria-pressed="false">Simple</button>
                 </div>
               </div>
               <div class="card-b">
@@ -171,17 +186,17 @@
                   <p class="hint" id="calSum"></p>
                 </div>
                 <div class="cal-nav">
-                  <button id="calPrev" title="Bulan sebelumnya">‹</button>
+                  <button type="button" id="calPrev" title="Bulan sebelumnya" aria-label="Bulan sebelumnya">‹</button>
                   <span id="calTitle"></span>
-                  <button id="calNext" title="Bulan berikutnya">›</button>
+                  <button type="button" id="calNext" title="Bulan berikutnya" aria-label="Bulan berikutnya">›</button>
                 </div>
               </div>
               <div class="card-b">
                 <div class="cal-legend">
-                  <span><i style="background:rgba(22,199,132,.7)"></i>Profit</span>
-                  <span><i style="background:rgba(246,70,93,.7)"></i>Loss</span>
-                  <span><i style="background:rgba(148,163,184,.5)"></i>Break-even</span>
-                  <span><i style="background:rgba(148,163,184,.14)"></i>Tanpa trade</span>
+                  <span><i style="background:var(--green-bg);border:1px solid var(--green-bd)"></i>Profit</span>
+                  <span><i style="background:var(--red-bg);border:1px solid var(--red-bd)"></i>Loss</span>
+                  <span><i style="background:var(--mut-bg);border:1px solid var(--mut-bd)"></i>Break-even</span>
+                  <span><i style="background:var(--cal-empty-bg);border:1px solid var(--line)"></i>Tanpa trade</span>
                   <span><i class="lg-target"></i>Target ≥10% ★</span>
                 </div>
                 <div class="cal" id="calGrid"></div>
@@ -233,20 +248,20 @@
                   </select>
                 </div>
                 <div class="field"><label>Posisi *</label>
-                  <div class="pos-seg" id="posSeg">
-                    <button type="button" data-pos="LONG" class="on">▲ LONG</button>
-                    <button type="button" data-pos="SHORT">▼ SHORT</button>
+                  <div class="pos-seg" id="posSeg" role="group" aria-label="Arah posisi trading">
+                    <button type="button" data-pos="LONG" class="on" aria-pressed="true">▲ LONG</button>
+                    <button type="button" data-pos="SHORT" aria-pressed="false">▼ SHORT</button>
                   </div>
                 </div>
                 <div class="field">
                   <div class="ps-label-row"><label for="fLot">Lot *</label><button type="button" class="lot-calc-link"
                       data-go="sizing" title="Buka Kalkulator Position Sizing">⚡ Hitung Lot</button></div>
                   <div style="display:flex;align-items:center">
-                    <button type="button" id="btnLotMinus" class="btn sm"
+                    <button type="button" id="btnLotMinus" class="btn sm" aria-label="Kurangi lot 0.01"
                       style="border-radius:4px 0 0 4px;padding:9px 13px;border-right:0">−</button>
                     <input type="number" id="fLot" step="0.01" min="0.01" value="0.01" placeholder="0.01"
                       style="border-radius:0;text-align:center">
-                    <button type="button" id="btnLotPlus" class="btn sm"
+                    <button type="button" id="btnLotPlus" class="btn sm" aria-label="Tambah lot 0.01"
                       style="border-radius:0 4px 4px 0;padding:9px 13px;border-left:0">+</button>
                   </div>
                 </div>
@@ -259,6 +274,7 @@
                     placeholder="Alasan entry, strategi, kondisi pasar, dan evaluasi setelah trade ditutup…"></textarea>
                 </div>
               </div>
+              <div class="news-alert-banner" id="journalNewsAlert" hidden></div>
               <div class="ret-preview" id="retPreview"></div>
               <div class="form-err" id="formErr" hidden></div>
               <div class="form-actions">
@@ -371,9 +387,9 @@
                   <div class="field ps-span-full">
                     <div class="ps-label-row">
                       <label for="psRiskInput">Risk per Trade</label>
-                      <div class="ps-mini-seg" id="psRiskModeSeg">
-                        <button type="button" data-rm="pct" class="active">% Modal</button>
-                        <button type="button" data-rm="usd">$ Nominal</button>
+                      <div class="ps-mini-seg" id="psRiskModeSeg" role="group" aria-label="Mode perhitungan risiko">
+                        <button type="button" data-rm="pct" class="active" aria-pressed="true">% Modal</button>
+                        <button type="button" data-rm="usd" aria-pressed="false">$ Nominal</button>
                       </div>
                     </div>
                     <input type="number" id="psRiskInput" step="0.1" min="0.01" value="1" placeholder="1.0"
@@ -392,9 +408,9 @@
                   <div class="field ps-span-full">
                     <div class="ps-label-row">
                       <label for="psSlPips">Jarak Stop Loss (SL)</label>
-                      <div class="ps-mini-seg" id="psSlModeSeg">
-                        <button type="button" data-sm="pips" class="active">Jarak Pips</button>
-                        <button type="button" data-sm="price">Entry &amp; SL</button>
+                      <div class="ps-mini-seg" id="psSlModeSeg" role="group" aria-label="Mode jarak Stop Loss">
+                        <button type="button" data-sm="pips" class="active" aria-pressed="true">Jarak Pips</button>
+                        <button type="button" data-sm="price" aria-pressed="false">Entry &amp; SL</button>
                       </div>
                     </div>
                     <div id="psSlPipsWrap">
@@ -411,12 +427,12 @@
                     <div id="psSlPriceWrap" hidden>
                       <div class="ps-form-grid" style="margin-top:2px">
                         <div>
-                          <label for="psEntryPrice" style="font-size:9.5px;color:var(--dim)">Harga Entry</label>
+                          <label for="psEntryPrice" style="font-size:12px;color:var(--mut)">Harga Entry</label>
                           <input type="number" id="psEntryPrice" step="any" min="0" placeholder="1.08500"
                             inputmode="decimal">
                         </div>
                         <div>
-                          <label for="psSlPrice" style="font-size:9.5px;color:var(--dim)">Harga Stop Loss</label>
+                          <label for="psSlPrice" style="font-size:12px;color:var(--mut)">Harga Stop Loss</label>
                           <input type="number" id="psSlPrice" step="any" min="0" placeholder="1.08300"
                             inputmode="decimal">
                         </div>
@@ -438,7 +454,7 @@
                   <h3>Hasil Position Sizing</h3>
                   <p class="hint" id="psSummarySub">Rekomendasi ukuran posisi sesuai batas risiko</p>
                 </div>
-                <span class="badge win" id="psRiskBadge">Risiko Ideal</span>
+                <span class="badge info" id="psRiskBadge">Risiko Ideal</span>
               </div>
               <div class="card-b">
                 <div class="ps-hero">
@@ -450,7 +466,7 @@
                   <div class="ps-hero-right">
                     <button type="button" class="btn sm primary" id="btnApplyLotToJournal">⚡ Gunakan Lot di
                       Jurnal</button>
-                    <span class="hint" id="psRoundingNote" style="font-size:10.5px">Dibulatkan ke 2 desimal lot
+                    <span class="hint" id="psRoundingNote" style="font-size:12px">Dibulatkan ke 2 desimal lot
                       broker</span>
                   </div>
                 </div>
@@ -616,7 +632,7 @@
               <div class="ai-gate-field">
                 <div class="ps-label-row">
                   <label for="aiProviderSelect">Server Penyedia AI</label>
-                  <span class="mono dim" style="font-size:10.5px">Live Grounding &amp; Macro Feed</span>
+                  <span class="mono mut" style="font-size:12px;color:var(--mut)">Live Grounding &amp; Macro Feed</span>
                 </div>
                 <select id="aiProviderSelect">
                   <option value="gemini">Google Gemini AI Server</option>
@@ -695,7 +711,7 @@
                     <p class="hint">Evaluasi otomatis pola eksekusi, disiplin, dan psikologi dari catatan trading Anda
                     </p>
                   </div>
-                  <span class="badge win" id="aiScoreBadge">Skor Disiplin: —</span>
+                  <span class="badge bee" id="aiScoreBadge">Skor Disiplin: —</span>
                 </div>
                 <div class="card-b" id="aiJournalInsightBody"></div>
               </section>
@@ -708,7 +724,7 @@
                     <p class="hint">Kebijakan The Fed, data ekonomi AS (CPI/NFP/DXY), &amp; arus safe haven konflik
                       geopolitik</p>
                   </div>
-                  <span class="badge short" id="aiRegimeBadge">Sentimen: —</span>
+                  <span class="badge bee" id="aiRegimeBadge">Sentimen: —</span>
                 </div>
                 <div class="card-b" id="aiMacroGeoBody"></div>
               </section>
@@ -723,7 +739,7 @@
                   <p class="hint">Panduan arah bias fundamental, pemicu makro utama, dan keselarasan dengan riwayat pair
                     jurnal Anda</p>
                 </div>
-                <span class="mono dim" id="aiLastUpdatedText" style="font-size:11px">Belum dianalisis</span>
+                <span class="mono" id="aiLastUpdatedText" style="font-size:12px;color:var(--mut)">Belum dianalisis</span>
               </div>
               <div class="card-b" id="aiFundamentalBiasBody"></div>
             </section>
@@ -734,11 +750,12 @@
                 <div>
                   <h3>4. Kalender Ekonomi &amp; Katalis Berita Mingguan (Senin – Jumat)</h3>
                   <p class="hint" id="aiEconWeekSub">Jadwal resmi Forex Factory minggu berjalan (WIB) — High &amp; Medium Impact</p>
+                  <div class="ai-cal-countdown mono" id="aiCalCountdown"></div>
                 </div>
-                <div class="seg ai-cal-filters" id="aiCalFilterGroup">
-                  <button type="button" class="active" data-cal-filter="all">Semua</button>
-                  <button type="button" data-cal-filter="high">🔥 High Impact</button>
-                  <button type="button" data-cal-filter="usd">🇺🇸 Fokus USD</button>
+                <div class="seg ai-cal-filters" id="aiCalFilterGroup" role="group" aria-label="Filter kalender ekonomi">
+                  <button type="button" class="active" data-cal-filter="all" aria-pressed="true">Semua</button>
+                  <button type="button" data-cal-filter="high" aria-pressed="false">🔥 High Impact</button>
+                  <button type="button" data-cal-filter="usd" aria-pressed="false">🇺🇸 Fokus USD</button>
                 </div>
               </div>
               <div class="card-b" id="aiEconCalendarBody"></div>
@@ -755,7 +772,7 @@
   <div id="modalRoot"></div>
   <div id="authGate" class="auth-gate" hidden></div>
 
-  <script src="script.js?v=20261115d"></script>
+  <script src="script.js?v=20261115n"></script>
 </body>
 
 </html>

@@ -30,6 +30,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', '
 const MONTHS_FULL = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 const DAYS = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 const LS_KEY = 'tjd.trades.v1', LS_SET = 'tjd.settings.v1';
+const LS_UI_THEME = 'tjd.ui.theme';
 const EMPTY_CH = '<div class="chart-empty">Belum ada trade pada periode ini.</div>';
 
 const pad = n => String(n).padStart(2, '0');
@@ -41,13 +42,57 @@ const fmtDate = s => { if (!s) return '—'; const d = parseISO(s); return `${pa
 const fmtDateLong = s => { const d = parseISO(s); return `${DAYS[d.getDay()]}, ${fmtDate(s)}` };
 const shortDate = s => { const p = fmtDate(s).split(' '); return p[0] + ' ' + p[1] };
 const nf = (v, min, max) => new Intl.NumberFormat('id-ID', { minimumFractionDigits: min, maximumFractionDigits: max }).format(v);
+const retArrow = v => (v == null || isNaN(v) || v === 0) ? '' : (v > 0 ? '▲ ' : '▼ ');
 function fmtPct(v, dec = 2) { if (v == null || isNaN(v)) return '—'; return (v > 0 ? '+' : '') + nf(v, dec, dec) + '%' }
+function fmtPctDir(v, dec = 2) { if (v == null || isNaN(v)) return '—'; return retArrow(v) + fmtPct(v, dec) }
 function fmtPrice(v) { if (v == null || isNaN(v)) return '—'; const dec = Math.abs(v) < 2 ? 5 : 2; return nf(v, dec, dec) }
 const fmtInt = v => nf(v, 0, 0);
 function fmtAxisPct(v) { const d = Math.abs(v) >= 10 ? 0 : Math.abs(v) >= 1 ? 1 : 2; return (v > 0 ? '+' : '') + new Intl.NumberFormat('id-ID', { maximumFractionDigits: d }).format(v) + '%' }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const trunc = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
 const pcls = v => (v == null || v === 0) ? 'be' : (v > 0 ? 'pos' : 'neg');
+
+function getPreferredTheme() {
+  try {
+    const saved = localStorage.getItem(LS_UI_THEME);
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch (_) {}
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function applyTheme(theme, persist = false) {
+  const mode = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', mode);
+  if (persist) {
+    try { localStorage.setItem(LS_UI_THEME, mode); } catch (_) {}
+  }
+  const btn = $('#btnThemeToggle');
+  if (btn) {
+    btn.textContent = mode === 'light' ? '☀️ Terang' : '🌙 Gelap';
+    btn.setAttribute('aria-pressed', mode === 'light' ? 'true' : 'false');
+    btn.title = mode === 'light' ? 'Mode Terang aktif (klik untuk Mode Gelap)' : 'Mode Gelap nyaman aktif (klik untuk Mode Terang)';
+  }
+}
+
+function initUiPreferences() {
+  applyTheme(getPreferredTheme(), false);
+
+  const btnTheme = $('#btnThemeToggle');
+  if (btnTheme) {
+    btnTheme.onclick = () => {
+      const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      applyTheme(cur === 'light' ? 'dark' : 'light', true);
+    };
+  }
+  const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+  if (mq && mq.addEventListener) {
+    mq.addEventListener('change', e => {
+      let hasManual = false;
+      try { hasManual = !!localStorage.getItem(LS_UI_THEME); } catch (_) {}
+      if (!hasManual) applyTheme(e.matches ? 'light' : 'dark', false);
+    });
+  }
+}
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms) } }
 
@@ -130,6 +175,32 @@ function getUserTradesKey() {
   } catch (_) {}
   return LS_KEY;
 }
+const TJD_META_RX = /\s*<!--TJD_META:(\{[\s\S]*?\})-->\s*$/;
+
+function unpackCloudNotes(rawNotes) {
+  const s = String(rawNotes || '');
+  const m = s.match(TJD_META_RX);
+  if (!m) return { cleanNotes: s.trim(), sl: null, pnlUsd: null };
+  const cleanNotes = s.replace(TJD_META_RX, '').trim();
+  try {
+    const meta = JSON.parse(m[1]);
+    const sl = (meta.sl != null && isFinite(Number(meta.sl)) && Number(meta.sl) > 0) ? Number(meta.sl) : null;
+    const pnlUsd = (meta.pnlUsd != null && isFinite(Number(meta.pnlUsd))) ? Number(meta.pnlUsd) : null;
+    return { cleanNotes, sl, pnlUsd };
+  } catch (_) {
+    return { cleanNotes, sl: null, pnlUsd: null };
+  }
+}
+
+function packCloudNotes(t) {
+  const base = String(t?.notes || '').replace(TJD_META_RX, '').trim();
+  const meta = {};
+  if (t?.sl != null && isFinite(Number(t.sl)) && Number(t.sl) > 0) meta.sl = Number(t.sl);
+  if (t?.pnlUsd != null && t?.pnlUsd !== '' && isFinite(Number(t.pnlUsd))) meta.pnlUsd = Number(t.pnlUsd);
+  if (!Object.keys(meta).length) return base;
+  return (base ? base + ' ' : '') + `<!--TJD_META:${JSON.stringify(meta)}-->`;
+}
+
 function loadTrades() {
   try {
     const key = getUserTradesKey();
@@ -147,6 +218,10 @@ function loadTrades() {
     return Array.isArray(r)
       ? r.filter(t => t && t.date && t.entry > 0 && t.exit > 0 && !deletedSet.has(String(t.id))).map(t => {
           if (t.lot == null && t.capital != null) t.lot = 0.10;
+          const unpacked = unpackCloudNotes(t.notes);
+          if (unpacked.sl != null && t.sl == null) t.sl = unpacked.sl;
+          if (unpacked.pnlUsd != null && t.pnlUsd == null) t.pnlUsd = unpacked.pnlUsd;
+          t.notes = unpacked.cleanNotes;
           return t;
         })
       : [];
@@ -214,6 +289,9 @@ function saveCapitalConfig(syncCloud = true) {
   if (syncCloud) syncCapitalToCloud();
 }
 
+let _lastTradePnlMap = new Map();
+let _eqComputing = false;
+
 function calcAccountEquity() {
   const cap = capitalConfig || loadCapitalConfig();
   const initBal = Math.max(0, Number(cap.initialBalance) || 0);
@@ -224,56 +302,70 @@ function calcAccountEquity() {
   let twrFactor = 1.0;
   const tradePnlMap = new Map();
 
-  // Gabungkan event mutasi modal & trade secara kronologis berdasarkan tanggal
-  const events = [];
-  (cap.flows || []).forEach(f => {
-    const amt = Number(f.amount) || 0;
-    if (amt > 0 && f.date) {
-      events.push({
-        kind: 'flow',
-        date: f.date,
-        order: 0, // Mutasi modal di tanggal yang sama dihitung sebelum trade hari itu
-        createdAt: Number(f.createdAt || 0),
-        flow: f
-      });
-    }
-  });
-  sorted().forEach(t => {
-    events.push({
-      kind: 'trade',
-      date: t.date || '',
-      order: 1,
-      createdAt: Number(t.createdAt || 0),
-      trade: t
-    });
-  });
-
-  events.sort((a, b) =>
-    (a.date || '').localeCompare(b.date || '') ||
-    (a.order - b.order) ||
-    (a.createdAt - b.createdAt)
-  );
-
-  events.forEach(ev => {
-    if (ev.kind === 'flow') {
-      const amt = Number(ev.flow.amount) || 0;
-      if (ev.flow.type === 'withdraw') {
-        runningBalance = Math.max(0, runningBalance - amt);
-        totalWithdraw += amt;
-      } else {
-        runningBalance += amt;
-        totalDeposit += amt;
+  _eqComputing = true;
+  try {
+    // Gabungkan event mutasi modal & trade secara kronologis berdasarkan tanggal
+    const events = [];
+    (cap.flows || []).forEach(f => {
+      const amt = Number(f.amount) || 0;
+      if (amt > 0 && f.date) {
+        events.push({
+          kind: 'flow',
+          date: f.date,
+          order: 0, // Mutasi modal di tanggal yang sama dihitung sebelum trade hari itu
+          createdAt: Number(f.createdAt || 0),
+          flow: f
+        });
       }
-    } else if (ev.kind === 'trade') {
-      const t = ev.trade;
-      const retPct = tradeRet(t);
-      const pnlUsd = runningBalance * (retPct / 100);
-      runningBalance = Math.max(0, runningBalance + pnlUsd);
-      tradingProfitUsd += pnlUsd;
-      twrFactor *= (1 + retPct / 100);
-      tradePnlMap.set(String(t.id), { pnlUsd, eqAfter: runningBalance, retPct });
-    }
-  });
+    });
+    sorted().forEach(t => {
+      events.push({
+        kind: 'trade',
+        date: t.date || '',
+        order: 1,
+        createdAt: Number(t.createdAt || 0),
+        trade: t
+      });
+    });
+
+    events.sort((a, b) =>
+      (a.date || '').localeCompare(b.date || '') ||
+      (a.order - b.order) ||
+      (a.createdAt - b.createdAt)
+    );
+
+    events.forEach(ev => {
+      if (ev.kind === 'flow') {
+        const amt = Number(ev.flow.amount) || 0;
+        if (ev.flow.type === 'withdraw') {
+          runningBalance = Math.max(0, runningBalance - amt);
+          totalWithdraw += amt;
+        } else {
+          runningBalance += amt;
+          totalDeposit += amt;
+        }
+      } else if (ev.kind === 'trade') {
+        const t = ev.trade;
+        const baseBal = runningBalance > 0 ? runningBalance : (initBal > 0 ? initBal : 1000);
+        const pnlUsd = tradePnlUsd(t);
+        const retPct = (pnlUsd / baseBal) * 100;
+        runningBalance = Math.max(0, runningBalance + pnlUsd);
+        tradingProfitUsd += pnlUsd;
+        twrFactor *= Math.max(0, 1 + retPct / 100);
+        tradePnlMap.set(String(t.id), {
+          pnlUsd,
+          eqAfter: runningBalance,
+          retPct,
+          baseBal,
+          rMult: tradeRMultiple(t),
+          isManualPnl: t.pnlUsd != null && t.pnlUsd !== '' && isFinite(Number(t.pnlUsd))
+        });
+      }
+    });
+    _lastTradePnlMap = tradePnlMap;
+  } finally {
+    _eqComputing = false;
+  }
 
   return {
     initialBalance: initBal,
@@ -328,13 +420,44 @@ function populateAssetSelect(selectedVal = '') {
 function getPipMultiplier(asset) {
   if (!asset) return 10000; const a = asset.toUpperCase();
   if (a.includes('JPY')) return 100;
-  if (a.includes('XAU') || a.includes('GOLD')) return 10;
+  if (a.includes('XAU') || a.includes('GOLD') || a.includes('WTI') || a.includes('OIL')) return 10;
   if (a.includes('BTC') || a.includes('ETH')) return 1;
   return 10000;
+}
+function getStandardPipValue(asset) {
+  const a = String(asset || 'XAUUSD').toUpperCase();
+  if (a.includes('BTC') || a.includes('ETH')) return 1;
+  if (a.includes('XAU') || a.includes('GOLD') || a.includes('WTI') || a.includes('OIL')) return 10;
+  if (a.includes('JPY')) return 6.67;
+  if (a.endsWith('CAD')) return 7.30;
+  if (a.endsWith('CHF')) return 11.30;
+  return 10;
 }
 function calcPips(asset, pos, entry, exit) {
   if (!entry || !exit) return 0; const diff = pos === 'LONG' ? (exit - entry) : (entry - exit);
   return diff * getPipMultiplier(asset);
+}
+function calcAutoPnlUsd(asset, pos, entry, exit, lot) {
+  const pips = calcPips(asset, pos, entry, exit);
+  const usedLot = (lot != null && isFinite(Number(lot)) && Number(lot) > 0) ? Number(lot) : 0.01;
+  return +(pips * getStandardPipValue(asset) * usedLot).toFixed(2);
+}
+function tradePnlUsd(t) {
+  if (!t) return 0;
+  if (t.pnlUsd != null && t.pnlUsd !== '' && isFinite(Number(t.pnlUsd))) {
+    return +Number(t.pnlUsd).toFixed(2);
+  }
+  return calcAutoPnlUsd(t.asset, t.position, Number(t.entry), Number(t.exit), t.lot);
+}
+function tradeRMultiple(t) {
+  if (!t || t.sl == null || t.sl === '' || !isFinite(Number(t.sl))) return null;
+  const entry = Number(t.entry), sl = Number(t.sl);
+  if (!isFinite(entry) || entry <= 0 || !isFinite(sl) || sl <= 0 || sl === entry) return null;
+  const slPips = Math.abs(entry - sl) * getPipMultiplier(t.asset);
+  const usedLot = (t.lot != null && isFinite(Number(t.lot)) && Number(t.lot) > 0) ? Number(t.lot) : 0.01;
+  const riskUsd = slPips * getStandardPipValue(t.asset) * usedLot;
+  if (riskUsd <= 0) return null;
+  return +(tradePnlUsd(t) / riskUsd).toFixed(2);
 }
 let trades = loadTrades();
 const state = {
@@ -345,7 +468,20 @@ let _freshRender = true;
 loadSettings();
 let formPos = 'LONG';
 
-const tradeRet = t => t.position === 'LONG' ? (t.exit - t.entry) / t.entry * 100 : (t.entry - t.exit) / t.entry * 100;
+function tradeRet(t) {
+  if (!t) return 0;
+  if (t.id != null && _lastTradePnlMap.has(String(t.id))) {
+    return _lastTradePnlMap.get(String(t.id)).retPct;
+  }
+  if (Array.isArray(trades) && trades.length && !_eqComputing) {
+    calcAccountEquity();
+    if (t.id != null && _lastTradePnlMap.has(String(t.id))) {
+      return _lastTradePnlMap.get(String(t.id)).retPct;
+    }
+  }
+  const base = Math.max(1, Number(capitalConfig?.initialBalance) || 1000);
+  return (tradePnlUsd(t) / base) * 100;
+}
 const sorted = () => [...trades].sort((a, b) => a.date === b.date ? ((a.createdAt || 0) - (b.createdAt || 0)) : (a.date < b.date ? -1 : 1));
 function periodRange() {
   const t = todayISO(); switch (state.period) {
@@ -362,6 +498,9 @@ function periodLabel() {
 }
 
 function metrics(arr) {
+  if (Array.isArray(trades) && trades.length && !_eqComputing) {
+    calcAccountEquity();
+  }
   const rets = arr.map(tradeRet);
   const wins = rets.filter(r => r > 0).length, losses = rets.filter(r => r < 0).length, be = rets.length - wins - losses;
   const avg = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : null;
@@ -445,9 +584,9 @@ function openAddPairModal(fallbackVal = 'XAUUSD') {
       <h3 style="margin-bottom:6px">Tambah Pair Kustom</h3>
       <p class="mmsg" style="margin-bottom:14px">Masukkan nama simbol pair/aset baru (contoh: GBPJPY, ETHUSDT, XAGUSD).</p>
       <div style="margin-bottom:18px">
-        <label style="font:600 11px var(--font-b);letter-spacing:.06em;text-transform:uppercase;color:var(--mut);display:block;margin-bottom:6px">Nama Simbol Pair</label>
-        <input type="text" id="mCustomPairInput" placeholder="Contoh: GBPJPY" maxlength="20" autofocus style="font-family:var(--font-m);font-weight:600;font-size:15px;letter-spacing:.05em;text-transform:uppercase">
-        <div id="mCustomPairErr" style="color:var(--red);font-size:12px;margin-top:6px" hidden></div>
+        <label style="font:600 12px var(--font-b);letter-spacing:.03em;text-transform:uppercase;color:var(--mut);display:block;margin-bottom:6px">Nama Simbol Pair</label>
+        <input type="text" id="mCustomPairInput" placeholder="Contoh: GBPJPY" maxlength="20" autofocus style="font-family:var(--font-m);font-weight:600;font-size:15px;letter-spacing:.04em;text-transform:uppercase">
+        <div id="mCustomPairErr" style="color:var(--gold);font-size:12px;margin-top:6px" hidden></div>
       </div>
       <div class="mact">
         <button type="button" class="btn ghost" id="mCustomCancel">Batal</button>
@@ -624,8 +763,8 @@ function updateAuthUI() {
 
   if (currentUser && currentUser.email) {
     const hasPin = !!getSavedPin(currentUser.email);
-    dot.style.background = 'var(--green)';
-    dot.style.boxShadow = '0 0 6px var(--green)';
+    dot.style.background = 'var(--accent)';
+    dot.style.boxShadow = 'none';
     const emailPrefix = currentUser.email.split('@')[0];
     const shortName = emailPrefix.length > 12 ? emailPrefix.slice(0, 11) + '…' : emailPrefix;
     txt.textContent = `${shortName}${hasPin ? ' · 🔒' : ''}`;
@@ -816,18 +955,23 @@ async function syncFromCloud(showFeedback = false) {
 
     if (error) throw error;
 
-    const cloudTrades = (data || []).map(t => ({
-      id: String(t.id),
-      date: t.date,
-      asset: t.asset,
-      position: t.position,
-      entry: Number(t.entry),
-      exit: Number(t.exit),
-      lot: t.lot != null ? Number(t.lot) : 0.01,
-      notes: t.notes || '',
-      createdAt: Number(t.created_at || t.createdAt || Date.now()),
-      _synced: true
-    }));
+    const cloudTrades = (data || []).map(t => {
+      const unpacked = unpackCloudNotes(t.notes);
+      return {
+        id: String(t.id),
+        date: t.date,
+        asset: t.asset,
+        position: t.position,
+        entry: Number(t.entry),
+        exit: Number(t.exit),
+        lot: t.lot != null ? Number(t.lot) : 0.01,
+        sl: unpacked.sl,
+        pnlUsd: unpacked.pnlUsd,
+        notes: unpacked.cleanNotes,
+        createdAt: Number(t.created_at || t.createdAt || Date.now()),
+        _synced: true
+      };
+    });
 
     const deletedSet = getDeletedTradeIds(emailKey);
 
@@ -858,7 +1002,7 @@ async function syncFromCloud(showFeedback = false) {
         entry: Number(t.entry),
         exit: Number(t.exit),
         lot: t.lot != null ? Number(t.lot) : 0.01,
-        notes: t.notes || '',
+        notes: packCloudNotes(t),
         created_at: Number(t.createdAt || Date.now())
       }));
       const { error: upErr } = await sbClient.from('trades').upsert(rowsToUpload);
@@ -971,10 +1115,10 @@ function renderAuthGate() {
     <div class="auth-brand">
       <div class="auth-brand-logo">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-          <path d="M7 3v3M7 16v5" stroke="#16c784" stroke-width="1.8" stroke-linecap="round" />
-          <rect x="4.5" y="6" width="5" height="10" rx="1.2" fill="#16c784" />
-          <path d="M17 4v4M17 16v4" stroke="#f6465d" stroke-width="1.8" stroke-linecap="round" />
-          <rect x="14.5" y="8" width="5" height="8" rx="1.2" fill="#f6465d" />
+          <path d="M7 3v3M7 16v5" stroke="var(--green)" stroke-width="1.8" stroke-linecap="round" />
+          <rect x="4.5" y="6" width="5" height="10" rx="1.2" fill="var(--green)" />
+          <path d="M17 4v4M17 16v4" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round" />
+          <rect x="14.5" y="8" width="5" height="8" rx="1.2" fill="var(--red)" />
         </svg>
       </div>
       <div class="auth-brand-txt">
@@ -991,7 +1135,7 @@ function renderAuthGate() {
         ${brandHTML}
         <div style="text-align:center">
           <div class="auth-user-pill">
-            <i style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block"></i>
+            <i style="width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block"></i>
             <span>${esc(email)}</span>
           </div>
         </div>
@@ -1343,7 +1487,7 @@ function handlePinKey(key) {
         const sub = $('#pinSubMsg');
         if (sub) {
           sub.textContent = 'PIN tidak sesuai, silakan coba lagi.';
-          sub.style.color = 'var(--red)';
+          sub.style.color = 'var(--gold)';
         }
         const card = $('#gateCard');
         if (card) {
@@ -1466,16 +1610,16 @@ function openAuthModal() {
         <div class="auth-avatar">${initial}</div>
         <div style="flex:1;min-width:0">
           <div style="font:600 14px var(--font-b);color:var(--text);word-break:break-all">${esc(email)}</div>
-          <div style="font-size:12px;color:var(--green);display:flex;align-items:center;gap:6px;margin-top:3px">
-            <span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block"></span>
+          <div style="font-size:12px;color:var(--accent);display:flex;align-items:center;gap:6px;margin-top:3px">
+            <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>
             ${hasPin ? 'PIN 4 Angka Aktif · Tersinkronisasi' : 'Tersinkronisasi'}
           </div>
         </div>
       </div>
 
-      <div style="background:#0d0d10;border:1px solid var(--line);border-radius:4px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+      <div style="background:var(--bg-inset);border:1px solid var(--line);border-radius:4px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
         <span style="color:var(--mut);font-size:13px">Total Trade Tercatat:</span>
-        <span style="font:700 15px var(--font-m);color:var(--gold)">${trades.length} trade</span>
+        <span style="font:700 15px var(--font-m);color:var(--accent)">${trades.length} trade</span>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px">
@@ -1554,13 +1698,13 @@ function tween(elm, to, fmt) {
 }
 
 /* ================= OVERVIEW ================= */
-const statCard = (i, label, val, sub) => `<div class="card stat${_freshRender ? ' reveal' : ''}" style="--d:${i * 35}ms"><div class="stat-label">${label}</div><div class="stat-value">${val}</div><div class="stat-sub">${sub}</div></div>`;
+const statCard = (i, label, val, sub, cls = '') => `<div class="card stat${cls ? ' ' + cls : ''}${_freshRender ? ' reveal' : ''}" style="--d:${i * 35}ms"><div class="stat-label">${label}</div><div class="stat-value">${val}</div><div class="stat-sub">${sub}</div></div>`;
 function sparkSVG(series) {
   if (!series || series.length < 2) return ''; const w = 110, h = 26;
   const lo = Math.min(...series), hi = Math.max(...series), sp = (hi - lo) || 1;
   const pts = series.map((v, i) => `${(i / (series.length - 1) * w).toFixed(1)},${(h - 3 - (v - lo) / sp * (h - 6)).toFixed(1)}`).join(' ');
   const up = series[series.length - 1] >= series[0];
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><polyline points="${pts}" fill="none" stroke="${up ? 'var(--green)' : 'var(--red)'}" stroke-width="1.6"/></svg>`
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><polyline points="${pts}" fill="none" stroke="${up ? 'var(--green)' : 'var(--red)'}" stroke-width="1.5"/></svg>`
 }
 
 function renderStatCards(m, arr) {
@@ -1577,12 +1721,12 @@ function renderStatCards(m, arr) {
 
   if (isInitialBuild) {
     box.innerHTML =
-      statCard(0, 'Total Trades', `<span id="vTotal"></span>`, `${m.wins}W · ${m.losses}L${m.be ? ` · ${m.be} BE` : ''} · ${days} hari aktif`) +
-      statCard(1, 'Win Rate', `<span id="vWR"></span>`, `<div class="wl-bar" style="width:100%"><i class="w" style="width:${wrW}%"></i><i class="l" style="width:${wrL}%"></i></div>`) +
-      statCard(2, 'Avg Return / Trade', `<span id="vAvg"></span>`, 'Rata-rata return — hanya trade tercatat') +
-      statCard(3, 'Cumulative Return', `<span id="vCum"></span>`, `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px">${sparkSVG(series)}<span>${state.cumMethod === 'comp' ? 'Compounded' : 'Simple'}</span></div>`) +
-      statCard(4, 'Best Trade', `<span id="vBest"></span>`, best ? `${esc(best.asset) || '—'} · ${fmtDate(best.date)} · ${best.position}` : '—') +
-      statCard(5, 'Max Drawdown', `<span id="vDD"></span>`, 'Compounded · puncak → lembah');
+      statCard(0, 'Total Trades', `<span id="vTotal"></span>`, `${m.wins}W · ${m.losses}L${m.be ? ` · ${m.be} BE` : ''} · ${days} hari aktif`, 'kpi-secondary') +
+      statCard(1, 'Win Rate', `<span id="vWR"></span>`, `<div class="wl-bar" style="width:100%"><i class="w" style="width:${wrW}%"></i><i class="l" style="width:${wrL}%"></i></div>`, 'kpi-primary') +
+      statCard(2, 'Avg Return / Trade', `<span id="vAvg"></span>`, 'Rata-rata return — hanya trade tercatat', 'kpi-secondary') +
+      statCard(3, 'Cumulative Return', `<span id="vCum"></span>`, `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px">${sparkSVG(series)}<span>${state.cumMethod === 'comp' ? 'Compounded' : 'Simple'}</span></div>`, 'kpi-primary') +
+      statCard(4, 'Best Trade', `<span id="vBest"></span>`, best ? `${esc(best.asset) || '—'} · ${fmtDate(best.date)} · ${best.position}` : '—', 'kpi-secondary') +
+      statCard(5, 'Max Drawdown', `<span id="vDD"></span>`, 'Compounded · puncak → lembah', 'kpi-primary');
   }
 
   if (_freshRender || isInitialBuild) {
@@ -1594,10 +1738,10 @@ function renderStatCards(m, arr) {
     };
     set('vTotal', m.total, v => fmtInt(Math.round(v)));
     set('vWR', m.winRate, v => fmtPct(v, 1));
-    set('vAvg', m.avg, v => fmtPct(v), pcls(m.avg));
-    set('vCum', m.total ? cumVal : null, v => fmtPct(v), pcls(cumVal));
-    set('vBest', best ? tradeRet(best) : null, v => fmtPct(v), best ? pcls(tradeRet(best)) : '');
-    set('vDD', m.total ? m.maxDD : null, v => fmtPct(v), pcls(m.maxDD));
+    set('vAvg', m.avg, v => fmtPctDir(v), pcls(m.avg));
+    set('vCum', m.total ? cumVal : null, v => fmtPctDir(v), pcls(cumVal));
+    set('vBest', best ? tradeRet(best) : null, v => fmtPctDir(v), best ? pcls(tradeRet(best)) : '');
+    set('vDD', m.total ? m.maxDD : null, v => fmtPctDir(v), pcls(m.maxDD));
     _freshRender = false;
   } else {
     // Mode stabil: Perbarui angka in-place TANPA animasi tween/muter saat scroll
@@ -1610,10 +1754,10 @@ function renderStatCards(m, arr) {
     };
     updateVal('vTotal', m.total, v => fmtInt(Math.round(v)));
     updateVal('vWR', m.winRate, v => fmtPct(v, 1));
-    updateVal('vAvg', m.avg, v => fmtPct(v), pcls(m.avg));
-    updateVal('vCum', m.total ? cumVal : null, v => fmtPct(v), pcls(cumVal));
-    updateVal('vBest', best ? tradeRet(best) : null, v => fmtPct(v), best ? pcls(tradeRet(best)) : '');
-    updateVal('vDD', m.total ? m.maxDD : null, v => fmtPct(v), pcls(m.maxDD));
+    updateVal('vAvg', m.avg, v => fmtPctDir(v), pcls(m.avg));
+    updateVal('vCum', m.total ? cumVal : null, v => fmtPctDir(v), pcls(cumVal));
+    updateVal('vBest', best ? tradeRet(best) : null, v => fmtPctDir(v), best ? pcls(tradeRet(best)) : '');
+    updateVal('vDD', m.total ? m.maxDD : null, v => fmtPctDir(v), pcls(m.maxDD));
   }
 
   if (!isInitialBuild) {
@@ -1686,24 +1830,24 @@ function renderCumChart() {
   });
   el('line', { x1: pl, x2: w - pr, y1: y0, y2: y0, class: 'zero' }, svg);
   const last = vals[n - 1];
-  const curveColor = last >= 0 ? '#10b981' : '#f43f5e';
+  const curveColor = last >= 0 ? 'var(--green)' : 'var(--red)';
   const defs = el('defs', {}, svg);
   const g = el('linearGradient', { id: 'gCum', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-  el('stop', { offset: '0%', 'stop-color': curveColor, 'stop-opacity': .16 }, g);
+  el('stop', { offset: '0%', 'stop-color': curveColor, 'stop-opacity': .10 }, g);
   el('stop', { offset: '100%', 'stop-color': curveColor, 'stop-opacity': 0 }, g);
   let d = `M${X(0)},${Y(vals[0])}`; for (let i = 1; i < n; i++)d += `L${X(i)},${Y(vals[i])}`;
   el('path', { d: `${d}L${X(n - 1)},${y0}L${X(0)},${y0}Z`, fill: 'url(#gCum)' }, svg);
-  const line = el('path', { d, fill: 'none', stroke: curveColor, 'stroke-width': 1.75, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+  const line = el('path', { d, fill: 'none', stroke: curveColor, 'stroke-width': 1.5, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
   if (_freshRender && !REDUCED) {
     const len = line.getTotalLength(); line.style.strokeDasharray = len; line.style.strokeDashoffset = len;
     line.getBoundingClientRect(); line.style.transition = 'stroke-dashoffset .8s ease'; line.style.strokeDashoffset = '0'
   }
-  el('text', { x: X(n - 1) + 8, y: Y(last) + 4, fill: curveColor, 'font-weight': '600', 'font-size': '11.5px' }, svg).textContent = fmtPct(last);
+  el('text', { x: X(n - 1) + 8, y: Y(last) + 4, fill: curveColor, 'font-weight': '600', 'font-size': '12px' }, svg).textContent = fmtPctDir(last);
   const le = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(iw / 70))));
   for (let i = 0; i < n; i++)if (i % le === 0 || i === n - 1)
     el('text', { x: X(i), y: h - 7, 'text-anchor': 'middle' }, svg).textContent = labels[i] === 'Mulai' ? 'Mulai' : shortDate(labels[i]);
   const vline = el('line', { y1: ptp, y2: h - pb, class: 'zero', opacity: 0 }, svg);
-  const focus = el('circle', { r: 4, fill: curveColor, stroke: '#09090b', 'stroke-width': 1.5, opacity: 0 }, svg);
+  const focus = el('circle', { r: 4, fill: curveColor, stroke: 'var(--panel)', 'stroke-width': 1.5, opacity: 0 }, svg);
   const ov = el('rect', { x: pl, y: ptp, width: iw, height: ih, fill: 'transparent' }, svg);
   ov.addEventListener('pointermove', e => {
     const bx = svg.getBoundingClientRect();
@@ -1720,7 +1864,7 @@ function renderRecent() {
   if (!list.length) { box.innerHTML = '<p class="hint" style="padding:16px 0;text-align:center">Belum ada riwayat trade.</p>'; return }
   box.innerHTML = list.map(t => {
     const r = tradeRet(t), c = pcls(r);
-    const res = r > 0 ? ['win', 'PROFIT'] : r < 0 ? ['loss', 'LOSS'] : ['bee', 'BE'];
+    const res = r > 0 ? ['win', '▲ PROFIT'] : r < 0 ? ['loss', '▼ LOSS'] : ['bee', 'BE'];
     const posIcon = t.position === 'LONG' ? '▲' : '▼';
     const lotStr = t.lot != null ? `${Number(t.lot).toFixed(2)} Lot` : '';
     return `<div class="rrow ${c}" data-id="${t.id}" title="${t.notes ? esc(t.notes) : 'Klik untuk melihat di jurnal'}">
@@ -1737,7 +1881,7 @@ function renderRecent() {
         </div>
       </div>
       <div class="rright">
-        <span class="rret mono ${c}">${fmtPct(r)}</span>
+        <span class="rret mono ${c}">${fmtPctDir(r)}</span>
         <span class="badge ${res[0]} sm">${res[1]}</span>
       </div>
     </div>`;
@@ -1798,15 +1942,15 @@ function renderCalDetail() {
   const netRet = dayTrades.reduce((s, t) => s + tradeRet(t), 0);
   const netCls = pcls(netRet);
   let html = `<div class="cd-head"><div><div class="cd-date">${fmtDateLong(dayTrades[0].date)}</div>
-    <div class="cd-asset">${dayTrades.length} trade${dayTrades.length > 1 ? 's' : ''} · <span class="badge ${netCls === 'pos' ? 'long' : netCls === 'neg' ? 'short' : ''}">Net ${fmtPct(netRet)}</span></div></div>
-    <div class="cd-ret ${netCls}">${fmtPct(netRet)}</div></div><div class="cd-list">`;
+    <div class="cd-asset">${dayTrades.length} trade${dayTrades.length > 1 ? 's' : ''} · <span class="badge ${netCls === 'pos' ? 'win' : netCls === 'neg' ? 'loss' : 'bee'}">Net ${fmtPctDir(netRet)}</span></div></div>
+    <div class="cd-ret ${netCls}">${fmtPctDir(netRet)}</div></div><div class="cd-list">`;
   dayTrades.forEach((t, i) => {
     const r = tradeRet(t), c = pcls(r);
     html += `<div class="cd-trade-item">
       <div class="cd-trade-num">Trade #${i + 1}</div>
       <div class="cd-trade-head">
         <div><div class="cd-asset">${esc(t.asset) || 'Tanpa aset'} · <span class="badge ${t.position.toLowerCase()}">${t.position === 'LONG' ? '▲' : '▼'} ${t.position}</span></div></div>
-        <div class="cd-ret ${c}" style="font-size:18px">${fmtPct(r)}</div>
+        <div class="cd-ret ${c}" style="font-size:18px">${fmtPctDir(r)}</div>
       </div>
       <div class="cd-grid mono"><span>Entry <b>${fmtPrice(t.entry)}</b></span><span>Exit <b>${fmtPrice(t.exit)}</b></span>${t.lot != null ? `<span>Lot <b>${Number(t.lot).toFixed(2)}</b></span>` : ''}</div>
       ${t.notes ? `<p class="cd-notes">${esc(t.notes)}</p>` : '<p class="cd-notes dim">Tidak ada catatan.</p>'}
@@ -1846,12 +1990,12 @@ function renderEquityStrip() {
   const eq = syncEquityToPs();
   const pnlCls = eq.tradingProfitUsd > 1e-6 ? 'pos' : eq.tradingProfitUsd < -1e-6 ? 'neg' : 'be';
   const grCls = eq.growthPct > 1e-6 ? 'pos' : eq.growthPct < -1e-6 ? 'neg' : 'be';
-  const pnlSign = eq.tradingProfitUsd > 1e-6 ? '+' : eq.tradingProfitUsd < -1e-6 ? '-' : '';
-  const grArrow = eq.growthPct > 1e-6 ? '▲ ' : eq.growthPct < -1e-6 ? '▼ ' : '';
+  const pnlArrow = eq.tradingProfitUsd > 1e-6 ? '<span class="pos">▲</span> +' : eq.tradingProfitUsd < -1e-6 ? '<span class="neg">▼</span> -' : '';
+  const grArrow = eq.growthPct > 1e-6 ? '<span class="pos">▲</span> ' : eq.growthPct < -1e-6 ? '<span class="neg">▼</span> ' : '';
 
   const flowParts = [`Modal Awal: <b>${fmtUsd(eq.initialBalance)}</b>`];
-  if (eq.totalDeposit > 0) flowParts.push(`Top-Up: <b class="pos">+${fmtUsd(eq.totalDeposit)}</b>`);
-  if (eq.totalWithdraw > 0) flowParts.push(`Withdraw: <b class="neg">-${fmtUsd(eq.totalWithdraw)}</b>`);
+  if (eq.totalDeposit > 0) flowParts.push(`Top-Up: <b>+${fmtUsd(eq.totalDeposit)}</b>`);
+  if (eq.totalWithdraw > 0) flowParts.push(`Withdraw: <b>-${fmtUsd(eq.totalWithdraw)}</b>`);
 
   box.innerHTML = `
     <div class="eq-strip-grid">
@@ -1862,7 +2006,7 @@ function renderEquityStrip() {
       </div>
       <div class="eq-item">
         <div class="eq-label">PROFIT / LOSS TRADING ($)</div>
-        <div class="eq-val mono ${pnlCls}">${pnlSign}${fmtUsd(Math.abs(eq.tradingProfitUsd))}</div>
+        <div class="eq-val mono ${pnlCls}">${pnlArrow}${fmtUsd(Math.abs(eq.tradingProfitUsd))}</div>
         <div class="eq-sub">Murni dari ${trades.length} trade · Opsi B (Compounded)</div>
       </div>
       <div class="eq-item">
@@ -1917,7 +2061,7 @@ function openCapitalModal() {
         <div class="cap-section">
           <div class="ps-label-row">
             <label for="capInitInput">1. Modal Awal Akun (Initial Balance $)</label>
-            <span class="mono dim" style="font-size:11px">USD ($)</span>
+            <span class="mono" style="font-size:12px;color:var(--mut)">USD ($)</span>
           </div>
           <div class="cap-init-row">
             <input type="number" id="capInitInput" step="any" min="0" value="${capitalConfig.initialBalance}" placeholder="1000" inputmode="decimal">
@@ -1940,15 +2084,15 @@ function openCapitalModal() {
           </div>
           <div class="cap-flow-grid">
             <div>
-              <label for="capFlowDate" style="font-size:10px;color:var(--dim);display:block;margin-bottom:4px">TANGGAL</label>
+              <label for="capFlowDate" style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">TANGGAL</label>
               <input type="date" id="capFlowDate" value="${todayISO()}">
             </div>
             <div>
-              <label for="capFlowAmt" style="font-size:10px;color:var(--dim);display:block;margin-bottom:4px">NOMINAL ($)</label>
+              <label for="capFlowAmt" style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">NOMINAL ($)</label>
               <input type="number" id="capFlowAmt" step="any" min="0.01" placeholder="Contoh: 500" inputmode="decimal">
             </div>
             <div class="cap-flow-note">
-              <label for="capFlowNote" style="font-size:10px;color:var(--dim);display:block;margin-bottom:4px">CATATAN (OPSIONAL)</label>
+              <label for="capFlowNote" style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">CATATAN (OPSIONAL)</label>
               <input type="text" id="capFlowNote" placeholder="Contoh: Top-up modal bulanan / Tarik profit">
             </div>
           </div>
@@ -1965,13 +2109,13 @@ function openCapitalModal() {
             ${flows.length ? flows.map(f => `
               <div class="cap-flow-row">
                 <div class="cfr-left">
-                  <span class="badge ${f.type === 'withdraw' ? 'loss' : 'win'}">${f.type === 'withdraw' ? '− WITHDRAW' : '+ TOP-UP'}</span>
+                  <span class="badge ${f.type === 'withdraw' ? 'bee' : 'info'}">${f.type === 'withdraw' ? '− WITHDRAW' : '+ TOP-UP'}</span>
                   <span class="mono cfr-date">${fmtDate(f.date)}</span>
                   <span class="cfr-note">${f.note ? esc(f.note) : '<span class="dim">Tanpa catatan</span>'}</span>
                 </div>
                 <div class="cfr-right">
-                  <b class="mono ${f.type === 'withdraw' ? 'neg' : 'pos'}">${f.type === 'withdraw' ? '-' : '+'}${fmtUsd(f.amount)}</b>
-                  <button type="button" class="cfr-del" data-del-flow="${f.id}" title="Hapus mutasi ini">✕</button>
+                  <b class="mono">${f.type === 'withdraw' ? '-' : '+'}${fmtUsd(f.amount)}</b>
+                  <button type="button" class="cfr-del" data-del-flow="${f.id}" title="Hapus mutasi ini" aria-label="Hapus mutasi ini">✕</button>
                 </div>
               </div>
             `).join('') : '<div class="dim" style="font-size:12px;padding:10px;text-align:center;border:1px dashed var(--line2);border-radius:4px">Belum ada riwayat Top-Up atau Withdraw tambahan.</div>'}
@@ -2161,6 +2305,10 @@ function renderTable() {
     const res = r > 0 ? ['win', 'PROFIT'] : r < 0 ? ['loss', 'LOSS'] : ['bee', 'BE'];
     const ex = state.expanded === t.id;
     const pInfo = eq.tradePnlMap.get(String(t.id));
+    const pnlUsd = pInfo ? pInfo.pnlUsd : tradePnlUsd(t);
+    const rMult = pInfo ? pInfo.rMult : tradeRMultiple(t);
+    const rBadge = rMult != null ? `<span class="r-badge ${rMult > 0 ? 'pos' : rMult < 0 ? 'neg' : ''}">${rMult >= 0 ? '+' : ''}${rMult.toFixed(2)}R</span>` : '';
+    const usdStr = `${pnlUsd >= 0 ? '+' : '-'}${fmtUsd(Math.abs(pnlUsd))}`;
     let html = `<tr class="trow ${c}${ex ? ' open' : ''}" data-id="${t.id}">
       <td class="mono${hasDateRange ? ' date-range-hit' : ''}">${fmtDate(t.date)}</td>
       <td>${esc(t.asset) || '<span class="dim">—</span>'}</td>
@@ -2168,15 +2316,16 @@ function renderTable() {
       <td class="mono r">${t.lot != null ? Number(t.lot).toFixed(2) : '<span class="dim">—</span>'}</td>
       <td class="mono r">${fmtPrice(t.entry)}</td>
       <td class="mono r">${fmtPrice(t.exit)}</td>
-      <td class="mono r ${c}"><div class="ret-cell"><b>${fmtPct(r)}</b><span class="badge sm ${res[0]}">${res[1]}</span></div></td>
+      <td class="mono r ${c}"><div class="ret-cell"><b>${retArrow(r)}${usdStr} (${fmtPct(r)})</b>${rBadge}<span class="badge sm ${res[0]}">${res[1]}</span></div></td>
       <td class="notes-cell" title="${esc(t.notes || '')}">${t.notes ? esc(trunc(t.notes, 32)) : '<span class="dim">—</span>'} <span class="chev">${ex ? '▴' : '▾'}</span></td></tr>`;
     if (ex) {
-      const mv = t.position === 'LONG' ? (t.exit - t.entry) : (t.entry - t.exit);
-      const pnlStr = pInfo ? `${pInfo.pnlUsd >= 0 ? '+' : '-'}${fmtUsd(Math.abs(pInfo.pnlUsd))} (Saldo: ${fmtUsd(pInfo.eqAfter)})` : '—';
+      const pips = calcPips(t.asset, t.position, t.entry, t.exit);
+      const srcLabel = pInfo?.isManualPnl ? 'Input Broker ($)' : 'Otomatis (pips × lot)';
+      const pnlStr = pInfo ? `${pInfo.pnlUsd >= 0 ? '+' : '-'}${fmtUsd(Math.abs(pInfo.pnlUsd))} (Saldo: ${fmtUsd(pInfo.eqAfter)})` : usdStr;
       html += `<tr class="trow-detail"><td colspan="8"><div class="detail-grid">
         <div><label>Catatan / Trading Journal</label><p>${t.notes ? esc(t.notes) : '<span class="dim">Tidak ada catatan.</span>'}</p></div>
-        <div><label>Pergerakan Harga</label><p class="mono">${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}<br><span class="${c}">${mv >= 0 ? '+' : ''}${fmtPrice(Math.abs(mv)).replace(/^/, '')} ${mv >= 0 ? '▲' : '▼'}</span></p></div>
-        <div><label>Lot &amp; Dampak Modal (Opsi B)</label><p class="mono">${t.lot != null ? Number(t.lot).toFixed(2) + ' Lot' : '—'}<br><span class="${c}">${pnlStr}</span></p></div>
+        <div><label>Eksekusi &amp; Stop Loss</label><p class="mono">${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}${t.sl ? ` · SL: ${fmtPrice(t.sl)}` : ''}<br><span class="${c}">${pips >= 0 ? '+' : ''}${pips.toFixed(1)} pips${rMult != null ? ` · <b>${rMult >= 0 ? '+' : ''}${rMult.toFixed(2)}R</b>` : ''}</span></p></div>
+        <div><label>Lot &amp; P&amp;L (${srcLabel})</label><p class="mono">${t.lot != null ? Number(t.lot).toFixed(2) + ' Lot' : '—'}<br><span class="${c}">${pnlStr}</span></p></div>
       </div>
       <div class="detail-actions"><button class="btn sm" data-act="edit" data-id="${t.id}">✎ Edit</button><button class="btn sm danger" data-act="del" data-id="${t.id}">Hapus</button></div></td></tr>`
     }
@@ -2186,19 +2335,37 @@ function renderTable() {
 }
 
 /* ---- form ---- */
-function syncPosSeg() { $$('#posSeg button').forEach(b => b.classList.toggle('on', b.dataset.pos === formPos)) }
+function syncPosSeg() {
+  $$('#posSeg button').forEach(b => {
+    const on = b.dataset.pos === formPos;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
 function updatePreview() {
   const e = parseFloat($('#fEntry').value), x = parseFloat($('#fExit').value), box = $('#retPreview');
   const assetVal = $('#fAsset').value;
   const lot = parseFloat($('#fLot').value) || 0.01;
+  const slVal = parseFloat($('#fSl')?.value);
+  const manualPnlRaw = $('#fPnlUsd')?.value;
+  const manualPnl = parseFloat(manualPnlRaw);
+  const hasManualPnl = manualPnlRaw != null && manualPnlRaw.trim() !== '' && isFinite(manualPnl);
+
   if (isFinite(e) && e > 0 && isFinite(x) && x > 0) {
-    const r = formPos === 'LONG' ? (x - e) / e * 100 : (e - x) / e * 100, c = pcls(r);
     const pips = calcPips(assetVal, formPos, e, x);
-    box.innerHTML = `<div class="rp-main ${c}">${r > 0 ? '▲' : r < 0 ? '▼' : '■'} ${fmtPct(r)}</div>
-      <div class="rp-sub">Return harga — ${formPos} · ${fmtPrice(e)} → ${fmtPrice(x)} · Lot: ${lot.toFixed(2)} · ${pips > 0 ? '+' : ''}${pips.toFixed(1)} pips</div>
-      <div class="rp-note">Return harga dihitung otomatis dari selisih pergerakan harga entry → exit.</div>`;
+    const autoUsd = calcAutoPnlUsd(assetVal, formPos, e, x, lot);
+    const finalUsd = hasManualPnl ? +manualPnl.toFixed(2) : autoUsd;
+    const eq = calcAccountEquity();
+    const baseBal = eq.currentBalance > 0 ? eq.currentBalance : (eq.initialBalance || 1000);
+    const retPct = (finalUsd / baseBal) * 100;
+    const c = pcls(finalUsd);
+    const rMult = tradeRMultiple({ asset: assetVal, position: formPos, entry: e, exit: x, lot, sl: isFinite(slVal) && slVal > 0 ? slVal : null, pnlUsd: hasManualPnl ? finalUsd : null });
+    const usdStr = `${finalUsd >= 0 ? '+' : '-'}${fmtUsd(Math.abs(finalUsd))}`;
+    box.innerHTML = `<div class="rp-main ${c}">${finalUsd > 0 ? '▲' : finalUsd < 0 ? '▼' : '■'} ${usdStr} (${fmtPct(retPct)})${rMult != null ? ` · ${rMult >= 0 ? '+' : ''}${rMult.toFixed(2)}R` : ''}</div>
+      <div class="rp-sub">${formPos} · ${fmtPrice(e)} → ${fmtPrice(x)} · Lot: ${lot.toFixed(2)} · ${pips > 0 ? '+' : ''}${pips.toFixed(1)} pips${rMult != null ? ` · SL: ${fmtPrice(slVal)}` : ''}</div>
+      <div class="rp-note">${hasManualPnl ? 'Menggunakan Profit/Loss USD aktual broker yang Anda input.' : `P&amp;L otomatis (pips × $${getStandardPipValue(assetVal)}/pip × ${lot.toFixed(2)} lot) terhadap saldo ${fmtUsd(baseBal)}.`}</div>`;
   } else {
-    box.innerHTML = '<div class="rp-main dim">— %</div><div class="rp-sub">Isi posisi, harga entry, dan harga exit — return dihitung otomatis.</div>';
+    box.innerHTML = '<div class="rp-main dim">— USD (— %)</div><div class="rp-sub">Isi posisi, lot, harga entry, dan exit — P&amp;L USD &amp; R-multiple dihitung otomatis.</div>';
   }
 }
 function updateFormUI() {
@@ -2212,8 +2379,12 @@ function updateFormUI() {
 }
 function resetForm() {
   $('#tradeForm').reset(); $('#fDate').value = todayISO();
-  $('#fLot').value = '0.01'; populateAssetSelect('XAUUSD');
+  $('#fLot').value = '0.01';
+  if ($('#fSl')) $('#fSl').value = '';
+  if ($('#fPnlUsd')) $('#fPnlUsd').value = '';
+  populateAssetSelect('XAUUSD');
   formPos = 'LONG'; syncPosSeg(); updatePreview(); $('#formErr').hidden = true;
+  if (typeof updateCalendarCountdownAndAlerts === 'function') updateCalendarCountdownAndAlerts();
 }
 function cancelEdit() { state.editingId = null; resetForm(); updateFormUI() }
 function startEdit(id) {
@@ -2222,7 +2393,10 @@ function startEdit(id) {
   $('#fDate').value = t.date; populateAssetSelect(t.asset || 'XAUUSD'); formPos = t.position; syncPosSeg();
   $('#fLot').value = (t.lot != null ? Number(t.lot) : 0.01).toFixed(2);
   $('#fEntry').value = t.entry; $('#fExit').value = t.exit; $('#fNotes').value = t.notes || '';
+  if ($('#fSl')) $('#fSl').value = t.sl != null ? t.sl : '';
+  if ($('#fPnlUsd')) $('#fPnlUsd').value = t.pnlUsd != null ? t.pnlUsd : '';
   updateFormUI(); updatePreview();
+  if (typeof updateCalendarCountdownAndAlerts === 'function') updateCalendarCountdownAndAlerts();
   $('#formCard').scrollIntoView({ behavior: REDUCED ? 'auto' : 'smooth', block: 'start' });
 }
 async function deleteTrade(id) {
@@ -2252,12 +2426,22 @@ $('#tradeForm').addEventListener('submit', e => {
   let asset = $('#fAsset').value;
   const entry = parseFloat($('#fEntry').value), exit = parseFloat($('#fExit').value);
   const lotRaw = $('#fLot').value, lot = parseFloat(lotRaw);
+  const slRaw = $('#fSl')?.value ?? '', sl = parseFloat(slRaw), hasSl = slRaw.trim() !== '';
+  const pnlRaw = $('#fPnlUsd')?.value ?? '', pnlVal = parseFloat(pnlRaw), hasPnl = pnlRaw.trim() !== '';
   const notes = $('#fNotes').value.trim(), errs = [];
   if (!date) errs.push('Tanggal entry wajib diisi.');
   if (!asset || asset === '__custom__') errs.push('Aset / Pair wajib dipilih.');
   if (!isFinite(lot) || lot <= 0) errs.push('Lot harus berupa angka lebih dari 0.');
   if (!isFinite(entry) || entry <= 0) errs.push('Harga entry harus berupa angka lebih dari 0.');
   if (!isFinite(exit) || exit <= 0) errs.push('Harga exit harus berupa angka lebih dari 0.');
+  if (hasSl) {
+    if (!isFinite(sl) || sl <= 0) errs.push('Stop Loss harus berupa angka lebih dari 0.');
+    else if (isFinite(entry) && formPos === 'LONG' && sl >= entry) errs.push('Untuk posisi LONG, Stop Loss harus di bawah harga Entry.');
+    else if (isFinite(entry) && formPos === 'SHORT' && sl <= entry) errs.push('Untuk posisi SHORT, Stop Loss harus di atas harga Entry.');
+  }
+  if (hasPnl && !isFinite(pnlVal)) {
+    errs.push('Profit / Loss Broker ($) harus berupa angka valid.');
+  }
   const errBox = $('#formErr');
   if (errs.length) {
     errBox.hidden = false; errBox.innerHTML = '<ul>' + errs.map(x => `<li>${x}</li>`).join('') + '</ul>';
@@ -2265,9 +2449,11 @@ $('#tradeForm').addEventListener('submit', e => {
     toast('Periksa kembali formulir', 'err'); return
   }
   errBox.hidden = true;
+  const cleanSl = hasSl && isFinite(sl) && sl > 0 ? sl : null;
+  const cleanPnlUsd = hasPnl && isFinite(pnlVal) ? +pnlVal.toFixed(2) : null;
   if (state.editingId) {
     const t = trades.find(x => x.id === state.editingId);
-    Object.assign(t, { date, asset, position: formPos, entry, exit, lot, notes, _unsynced: true });
+    Object.assign(t, { date, asset, position: formPos, entry, exit, lot, sl: cleanSl, pnlUsd: cleanPnlUsd, notes, _unsynced: true });
     saveTrades();
     toast('Perubahan trade disimpan');
     if (currentUser && !currentUser.isLocalOnly && sbClient) {
@@ -2283,7 +2469,7 @@ $('#tradeForm').addEventListener('submit', e => {
             entry: t.entry,
             exit: t.exit,
             lot: t.lot,
-            notes: t.notes,
+            notes: packCloudNotes(t),
             created_at: t.createdAt || Date.now()
           }]);
           if (error) console.error('Cloud update trade error:', error);
@@ -2298,7 +2484,7 @@ $('#tradeForm').addEventListener('submit', e => {
       })();
     }
   } else {
-    const newTrade = { id: uid(), date, asset, position: formPos, entry, exit, lot, notes, createdAt: Date.now(), _unsynced: true };
+    const newTrade = { id: uid(), date, asset, position: formPos, entry, exit, lot, sl: cleanSl, pnlUsd: cleanPnlUsd, notes, createdAt: Date.now(), _unsynced: true };
     removeDeletedTradeId(currentUser?.email, newTrade.id);
     trades.push(newTrade);
     saveTrades(); // Segera simpan ke localStorage agar tidak hilang saat refresh!
@@ -2316,7 +2502,7 @@ $('#tradeForm').addEventListener('submit', e => {
             entry: newTrade.entry,
             exit: newTrade.exit,
             lot: newTrade.lot,
-            notes: newTrade.notes,
+            notes: packCloudNotes(newTrade),
             created_at: newTrade.createdAt
           }]);
           if (error) console.warn('Cloud insert trade error (tersimpan lokal):', error);
@@ -2354,9 +2540,13 @@ $('#fAsset').addEventListener('change', e => {
   } else {
     prevAssetVal = e.target.value;
     updatePreview();
+    if (typeof updateCalendarCountdownAndAlerts === 'function') updateCalendarCountdownAndAlerts();
   }
 });
-['fEntry', 'fExit', 'fLot'].forEach(id => $('#' + id).addEventListener('input', updatePreview));
+['fEntry', 'fExit', 'fLot', 'fSl', 'fPnlUsd'].forEach(id => {
+  const el = $('#' + id);
+  if (el) el.addEventListener('input', updatePreview);
+});
 
 /* ---- filter tabel ---- */
 $('#tSearch').addEventListener('input', e => { state.j.q = e.target.value.trim().toLowerCase(); renderTable() });
@@ -2405,10 +2595,21 @@ if ($('#tRangeBanner')) {
 /* ---- CSV ---- */
 function exportCSV(list, name) {
   if (!list.length) { toast('Tidak ada data untuk diekspor', 'err'); return }
-  const head = ['Tanggal', 'Aset', 'Posisi', 'Harga Entry', 'Harga Exit', 'Return (%)', 'Lot', 'Catatan', 'Sumber'];
+  const head = ['Tanggal', 'Aset', 'Posisi', 'Harga Entry', 'Harga Exit', 'Stop Loss', 'Lot', 'Pips', 'P&L (USD)', 'R-Multiple', 'Return (%)', 'Catatan', 'Sumber'];
   const q = v => { v = v == null ? '' : String(v); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v };
   const lines = [head.join(',')];
-  list.forEach(t => lines.push([t.date, t.asset || '', t.position, t.entry, t.exit, tradeRet(t).toFixed(4), t.lot != null ? Number(t.lot).toFixed(2) : '', t.notes ?? '', 'REAL'].map(q).join(',')));
+  list.forEach(t => {
+    const pips = calcPips(t.asset, t.position, t.entry, t.exit).toFixed(1);
+    const pnl = tradePnlUsd(t).toFixed(2);
+    const rMult = tradeRMultiple(t);
+    lines.push([
+      t.date, t.asset || '', t.position, t.entry, t.exit,
+      t.sl != null ? t.sl : '',
+      t.lot != null ? Number(t.lot).toFixed(2) : '',
+      pips, pnl, rMult != null ? rMult.toFixed(2) + 'R' : '',
+      tradeRet(t).toFixed(4), t.notes ?? '', 'REAL'
+    ].map(q).join(','));
+  });
   const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${name}_${todayISO()}.csv`; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
@@ -2492,14 +2693,14 @@ function renderDDChart() {
   });
   el('line', { x1: pl, x2: w - pr, y1: y0, y2: y0, class: 'zero' }, svg);
   const defs = el('defs', {}, svg), g = el('linearGradient', { id: 'gDD', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-  el('stop', { offset: '0%', 'stop-color': '#f43f5e', 'stop-opacity': 0 }, g);
-  el('stop', { offset: '100%', 'stop-color': '#f43f5e', 'stop-opacity': .2 }, g);
+  el('stop', { offset: '0%', 'stop-color': 'var(--red)', 'stop-opacity': 0 }, g);
+  el('stop', { offset: '100%', 'stop-color': 'var(--red)', 'stop-opacity': .10 }, g);
   let d = `M${X(0)},${Y(dd[0])}`; for (let i = 1; i < n; i++)d += `L${X(i)},${Y(dd[i])}`;
   el('path', { d: `${d}L${X(n - 1)},${y0}L${X(0)},${y0}Z`, fill: 'url(#gDD)' }, svg);
-  el('path', { d, fill: 'none', stroke: 'var(--red)', 'stroke-width': 1.75, 'stroke-linejoin': 'round' }, svg);
+  el('path', { d, fill: 'none', stroke: 'var(--red)', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }, svg);
   let mi = 0; dd.forEach((v, i) => { if (v < dd[mi]) mi = i });
   el('circle', { cx: X(mi), cy: Y(dd[mi]), r: 3.6, fill: 'var(--red)' }, svg);
-  el('text', { x: X(mi) + 7, y: Y(dd[mi]) + 4, fill: 'var(--red)', 'font-size': '11px', 'font-weight': '600' }, svg).textContent = fmtPct(dd[mi]);
+  el('text', { x: X(mi) + 7, y: Y(dd[mi]) + 4, fill: 'var(--red)', 'font-size': '12px', 'font-weight': '600' }, svg).textContent = fmtPctDir(dd[mi]);
   const ov = el('rect', { x: pl, y: ptp, width: iw, height: ih, fill: 'transparent' }, svg);
   ov.addEventListener('pointermove', e => {
     const bx = svg.getBoundingClientRect();
@@ -2621,18 +2822,23 @@ function renderInsights(arr, m) {
   // 4. Evaluasi Rasio Risk-to-Reward / Win vs Loss Nyata
   const wins = arr.filter(t => tradeRet(t) > 0);
   const losses = arr.filter(t => tradeRet(t) < 0);
+  const rValues = arr.map(tradeRMultiple).filter(v => v != null);
+  const rText = rValues.length
+    ? ` · Rata-rata R-Multiple: <b>${(rValues.reduce((a, b) => a + b, 0) / rValues.length) >= 0 ? '+' : ''}${(rValues.reduce((a, b) => a + b, 0) / rValues.length).toFixed(2)}R</b> (${rValues.length} trade dengan SL)`
+    : '';
+
   if (wins.length && losses.length) {
     const avgWin = wins.reduce((s, t) => s + tradeRet(t), 0) / wins.length;
     const avgLoss = Math.abs(losses.reduce((s, t) => s + tradeRet(t), 0) / losses.length);
     const realRR = avgWin / (avgLoss || 1);
     const verdict = realRR >= 1.5 ? 'sistem trading sangat sehat' : realRR >= 1 ? 'sistem cukup seimbang' : 'perketat Stop Loss';
-    out.push(`Rasio Risk-to-Reward riil: <b>1 : ${realRR.toFixed(2)}</b> (avg win <b>${fmtPct(avgWin)}</b> vs loss <b>${fmtPct(-avgLoss)}</b>) · ${verdict}.`);
+    out.push(`Rasio Risk-to-Reward riil: <b>1 : ${realRR.toFixed(2)}</b> (avg win <b>${fmtPct(avgWin)}</b> vs loss <b>${fmtPct(-avgLoss)}</b>) · ${verdict}${rText}.`);
   } else if (wins.length && !losses.length) {
-    out.push(`Rasio performa sempurna: <b>100% win</b> (${wins.length} trade) pada rentang waktu ini tanpa catatan loss.`);
+    out.push(`Rasio performa sempurna: <b>100% win</b> (${wins.length} trade) pada rentang waktu ini tanpa catatan loss${rText}.`);
   } else if (!wins.length && losses.length) {
-    out.push(`Evaluasi strategi: Belum ada trade profit di periode ini (${losses.length} loss) — tinjau kembali titik entry & konfirmasi teknikal.`);
+    out.push(`Evaluasi strategi: Belum ada trade profit di periode ini (${losses.length} loss) — tinjau kembali titik entry & konfirmasi teknikal${rText}.`);
   } else {
-    out.push(`Seluruh trade pada periode ini berakhir Break-Even (BE).`);
+    out.push(`Seluruh trade pada periode ini berakhir Break-Even (BE)${rText}.`);
   }
 
   ul.innerHTML = out.map(x => `<li>${x}</li>`).join('');
@@ -2652,13 +2858,14 @@ const psState = { pair: 'XAUUSD', balance: 1000, riskMode: 'pct', riskVal: 1, sl
 
 function getDefaultPipValue(asset) {
   const a = (asset || 'XAUUSD').toUpperCase();
-  if (a.endsWith('USD') && !a.startsWith('XAU') && !a.startsWith('BTC')) return { val: 10, note: 'Quote USD: $10 / pip per 1.00 lot' };
-  if (a.includes('XAU') || a.includes('GOLD')) return { val: 10, note: 'XAUUSD (100 oz): $10 / pip (1 pip = 0.10 poin)' };
-  if (a.includes('JPY')) return { val: 6.67, note: 'Pair JPY: ~$6.67 / pip per 1.00 lot (estimasi kurs ~150)' };
-  if (a.endsWith('CAD')) return { val: 7.30, note: 'Quote CAD: ~$7.30 / pip per 1.00 lot' };
-  if (a.endsWith('CHF')) return { val: 11.30, note: 'Quote CHF: ~$11.30 / pip per 1.00 lot' };
-  if (a.includes('BTC')) return { val: 1, note: 'Crypto (1 kontrak): $1 / poin per 1.00 lot' };
-  return { val: 10, note: 'Standar $10 / pip per 1.00 lot' };
+  const val = getStandardPipValue(a);
+  if (a.includes('XAU') || a.includes('GOLD')) return { val, note: 'XAUUSD (100 oz): $10 / pip (1 pip = 0.10 poin)' };
+  if (a.includes('WTI') || a.includes('OIL')) return { val, note: 'Minyak WTI: $10 / pip (1 pip = 0.10 poin)' };
+  if (a.includes('JPY')) return { val, note: 'Pair JPY: ~$6.67 / pip per 1.00 lot (estimasi kurs ~150)' };
+  if (a.endsWith('CAD')) return { val, note: 'Quote CAD: ~$7.30 / pip per 1.00 lot' };
+  if (a.endsWith('CHF')) return { val, note: 'Quote CHF: ~$11.30 / pip per 1.00 lot' };
+  if (a.includes('BTC') || a.includes('ETH')) return { val, note: 'Crypto (1 kontrak): $1 / poin per 1.00 lot' };
+  return { val, note: 'Quote USD: $10 / pip per 1.00 lot' };
 }
 
 function loadPsSettings() {
@@ -2693,9 +2900,17 @@ function syncPsUI() {
   if (!psState.customPip) psState.pipVal = defPip.val;
   $('#psPipVal').value = psState.pipVal;
 
-  $$('#psRiskModeSeg button').forEach(b => b.classList.toggle('active', b.dataset.rm === psState.riskMode));
+  $$('#psRiskModeSeg button').forEach(b => {
+    const on = b.dataset.rm === psState.riskMode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
   $('#psRiskPresets').hidden = psState.riskMode !== 'pct';
-  $$('#psSlModeSeg button').forEach(b => b.classList.toggle('active', b.dataset.sm === psState.slMode));
+  $$('#psSlModeSeg button').forEach(b => {
+    const on = b.dataset.sm === psState.slMode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
   $('#psSlPipsWrap').hidden = psState.slMode !== 'pips';
   $('#psSlPriceWrap').hidden = psState.slMode !== 'price';
 }
@@ -2769,17 +2984,17 @@ function renderPositionSizing() {
     badge.className = 'badge bee'; badge.textContent = 'Belum Diisi';
     meterFill.style.background = 'var(--dim)'; meterTxt.textContent = '0.00% — Masukkan risiko';
   } else if (riskPct <= 1) {
-    badge.className = 'badge win'; badge.textContent = 'Konservatif / Aman';
-    meterFill.style.background = 'var(--green)'; meterTxt.textContent = `${nf(riskPct, 2, 2)}% — Konservatif (Sangat Aman)`;
+    badge.className = 'badge info'; badge.textContent = 'Konservatif / Aman';
+    meterFill.style.background = 'var(--accent)'; meterTxt.textContent = `${nf(riskPct, 2, 2)}% — Konservatif (Sangat Aman)`;
   } else if (riskPct <= 2) {
-    badge.className = 'badge win'; badge.textContent = 'Risiko Ideal';
-    meterFill.style.background = 'var(--green)'; meterTxt.textContent = `${nf(riskPct, 2, 2)}% — Standar Manajemen Risiko Ideal`;
+    badge.className = 'badge info'; badge.textContent = 'Risiko Ideal';
+    meterFill.style.background = 'var(--accent)'; meterTxt.textContent = `${nf(riskPct, 2, 2)}% — Standar Manajemen Risiko Ideal`;
   } else if (riskPct <= 3.5) {
-    badge.className = 'badge short'; badge.textContent = 'Moderat / Agresif';
+    badge.className = 'badge warn'; badge.textContent = 'Moderat / Agresif';
     meterFill.style.background = 'var(--gold)'; meterTxt.textContent = `${nf(riskPct, 2, 2)}% — Moderat / Agresif (Waspada Loss Streak)`;
   } else {
-    badge.className = 'badge loss'; badge.textContent = 'Risiko Tinggi!';
-    meterFill.style.background = 'var(--red)'; meterTxt.textContent = `${nf(riskPct, 2, 2)}% — Berbahaya / High Risk Over-leverage`;
+    badge.className = 'badge warn'; badge.textContent = '⚠ Risiko Tinggi!';
+    meterFill.style.background = 'var(--gold)'; meterTxt.textContent = `${nf(riskPct, 2, 2)}% — Peringatan Over-leverage`;
   }
 
   // Warnings
@@ -2830,7 +3045,7 @@ function renderPositionSizing() {
     const ddComp = bal > 0 ? ((eqComp - bal) / bal) * 100 : 0;
     const eqFix = Math.max(0, bal - riskUsd * n);
     return `<div class="ps-dd-item">
-      <div class="ps-dd-top"><b>${n}x Loss</b><span class="neg mono">${fmtPct(ddComp, 1)}</span></div>
+      <div class="ps-dd-top"><b>${n}x Loss</b><span class="neg mono">▼ ${fmtPct(ddComp, 1)}</span></div>
       <div class="ps-dd-val mono">${fmtUsd(eqComp)}</div>
       <div class="ps-dd-sub"><span>Tetap:</span><span class="mono">${fmtUsd(eqFix)}</span></div>
     </div>`;
@@ -2955,11 +3170,13 @@ $('#btnApplyLotToJournal').onclick = () => {
     const ep = parseFloat($('#psEntryPrice').value) || 0, sp = parseFloat($('#psSlPrice').value) || 0;
     if (ep > 0 && sp > 0 && ep !== sp) {
       $('#fEntry').value = ep;
+      if ($('#fSl')) $('#fSl').value = sp;
       formPos = ep > sp ? 'LONG' : 'SHORT';
       syncPosSeg();
     }
   }
   updatePreview();
+  if (typeof updateCalendarCountdownAndAlerts === 'function') updateCalendarCountdownAndAlerts();
   go('journal');
   toast(`Ukuran posisi ${finalLot.toFixed(2)} lot (${pair}) diterapkan ke Jurnal`);
 };
@@ -3005,24 +3222,85 @@ $('#btnInfo').onclick = () => infoBox('Metrik & Penyimpanan', `
 /* ================= ANALITIK AI (DESKTOP ONLY · VERIFIED API KEY GATE) ================= */
 const LS_AI_FALLBACK = 'tjd.ai.v1';
 const GEMINI_PREFERRED_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.8-flash-lite',
   'gemini-3.1-flash-lite-preview',
-  'gemini-2.5-flash-lite',
   'gemini-flash-lite-latest',
-  'gemini-3.8-pro',
-  'gemini-2.5-pro',
+  'gemini-3.1-pro-preview',
+  'gemini-flash-latest',
   'gemini-pro-latest',
-  'gemini-3.5-flash',
-  'gemini-3.0-flash',
-  'gemini-flash-latest'
+  'gemini-3.0-flash'
 ];
+
+const AI_REPORT_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    disciplineScore: { type: 'NUMBER' },
+    scoreLabel: { type: 'STRING' },
+    executiveSummary: { type: 'STRING' },
+    noteInsights: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          title: { type: 'STRING' },
+          badge: { type: 'STRING' },
+          tone: { type: 'STRING' },
+          detail: { type: 'STRING' }
+        },
+        required: ['title', 'badge', 'tone', 'detail']
+      }
+    },
+    actionPlan: { type: 'ARRAY', items: { type: 'STRING' } },
+    macroSentiment: {
+      type: 'OBJECT',
+      properties: {
+        regime: { type: 'STRING' },
+        usEconomySummary: { type: 'STRING' },
+        fedPolicyOutlook: { type: 'STRING' },
+        geopoliticalSafeHaven: { type: 'STRING' },
+        portfolioImpact: { type: 'STRING' },
+        usdStatus: { type: 'STRING' },
+        usdConclusion: { type: 'STRING' }
+      },
+      required: ['regime', 'usEconomySummary', 'fedPolicyOutlook', 'geopoliticalSafeHaven', 'portfolioImpact', 'usdStatus', 'usdConclusion']
+    },
+    macroCatalysts: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          category: { type: 'STRING' },
+          title: { type: 'STRING' },
+          impact: { type: 'STRING' },
+          summary: { type: 'STRING' }
+        },
+        required: ['category', 'title', 'impact', 'summary']
+      }
+    },
+    pairBiases: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          pair: { type: 'STRING' },
+          bias: { type: 'STRING' },
+          conviction: { type: 'STRING' },
+          spotRef: { type: 'STRING' },
+          drivers: { type: 'STRING' },
+          keyContext: { type: 'STRING' },
+          userAlignment: { type: 'STRING' }
+        },
+        required: ['pair', 'bias', 'conviction', 'spotRef', 'drivers', 'keyContext', 'userAlignment']
+      }
+    }
+  },
+  required: ['disciplineScore', 'scoreLabel', 'executiveSummary', 'noteInsights', 'actionPlan', 'macroSentiment', 'macroCatalysts', 'pairBiases']
+};
 
 const aiState = {
   provider: 'gemini',
   apiKeyB64: '',
   verified: false,
-  model: 'gemini-3.8-flash',
+  model: 'gemini-3.1-flash-lite-preview',
   availableModels: [],
   verifiedAt: 0,
   lastHash: '',
@@ -3031,6 +3309,7 @@ const aiState = {
   gateOpen: false,
   calFilter: 'all',
   ffCalendar: null,
+  ffRawEvents: null,
   ffFetchedAt: 0
 };
 
@@ -3065,7 +3344,7 @@ function loadAiConfig() {
   try {
     const raw = localStorage.getItem(getUserAiKey());
     if (!raw) {
-      Object.assign(aiState, { provider: 'gemini', apiKeyB64: '', verified: false, model: 'gemini-3.8-flash', verifiedAt: 0, lastHash: '', lastReport: null });
+      Object.assign(aiState, { provider: 'gemini', apiKeyB64: '', verified: false, model: 'gemini-3.1-flash-lite-preview', verifiedAt: 0, lastHash: '', lastReport: null });
       return;
     }
     const parsed = JSON.parse(raw);
@@ -3073,7 +3352,11 @@ function loadAiConfig() {
       aiState.provider = parsed.provider === 'openai' ? 'openai' : 'gemini';
       aiState.apiKeyB64 = parsed.apiKeyB64 || '';
       aiState.verified = !!(parsed.verified && parsed.apiKeyB64);
-      aiState.model = parsed.model || (aiState.provider === 'openai' ? 'gpt-4o-mini' : 'gemini-3.8-flash');
+      let savedModel = parsed.model || (aiState.provider === 'openai' ? 'gpt-4o-mini' : 'gemini-3.1-flash-lite-preview');
+      if (aiState.provider !== 'openai' && (/^gemini-(1\.5|2\.0|2\.5)-/i.test(savedModel) || savedModel === 'gemini-3.8-flash')) {
+        savedModel = 'gemini-3.1-flash-lite-preview';
+      }
+      aiState.model = savedModel;
       aiState.verifiedAt = Number(parsed.verifiedAt || 0);
       aiState.lastHash = parsed.lastHash || '';
       aiState.lastReport = parsed.lastReport || null;
@@ -3110,25 +3393,22 @@ function setAiConnStatus(type, html) {
 
 function rankGeminiModels(available) {
   const activeText = (available || []).filter(m =>
-    m && !/tts|image|audio|embedding|robotics|computer-use|live|thinking|learnlm|aqa|veo|imagen|gemma|gemini-1\.5|gemini-2\.0|gemini-2\.5-flash(?!-lite)/i.test(m)
+    m && !/tts|image|audio|embedding|robotics|computer-use|live|thinking|learnlm|aqa|veo|imagen|gemma|gemini-1\.5|gemini-2\.0|gemini-2\.5/i.test(m)
   );
   const clean = activeText.length
     ? activeText
-    : (available || []).filter(m => m && !/tts|image|audio|embedding|robotics|computer-use|live/i.test(m));
-  const pool = clean.length ? clean : (available || []);
+    : (available || []).filter(m => m && !/tts|image|audio|embedding|robotics|computer-use|live|gemini-1\.5|gemini-2\.0|gemini-2\.5/i.test(m));
+  const pool = clean.length ? clean : (available || []).filter(m => m && !/^gemini-(1\.5|2\.0|2\.5)/i.test(m));
   const ordered = [];
   const addUnique = m => { if (m && !ordered.includes(m)) ordered.push(m); };
 
-  // 1. Model Flash utama jika tersedia
-  if (pool.includes('gemini-3.8-flash')) addUnique('gemini-3.8-flash');
-  // 2. Klaster Flash-Lite (jalur server berbeda & paling jarang high demand)
-  GEMINI_PREFERRED_MODELS.filter(p => p.includes('flash-lite') && pool.includes(p)).forEach(addUnique);
-  pool.filter(m => m.includes('flash-lite')).forEach(addUnique);
-  // 3. Klaster Pro (jalur server berbeda)
-  GEMINI_PREFERRED_MODELS.filter(p => p.includes('pro') && pool.includes(p)).forEach(addUnique);
-  pool.filter(m => m.includes('pro')).forEach(addUnique);
-  // 4. Varian Flash lain & sisa model preferred/pool
+  // 1. Prioritaskan model preferred yang tersedia di API Key
   GEMINI_PREFERRED_MODELS.forEach(p => { if (pool.includes(p)) addUnique(p); });
+  // 2. Klaster Flash-Lite (jalur cepat & hemat kuota)
+  pool.filter(m => m.includes('flash-lite')).forEach(addUnique);
+  // 3. Klaster Pro (termasuk 3.1-pro)
+  pool.filter(m => /3\.1-pro|\bpro\b|-pro-/i.test(m) || m.includes('pro')).forEach(addUnique);
+  // 4. Varian Flash lain & sisa model Gemini aktif
   pool.filter(m => m.includes('flash')).forEach(addUnique);
   pool.filter(m => m.includes('gemini')).forEach(addUnique);
   pool.forEach(addUnique);
@@ -3209,10 +3489,8 @@ async function verifyAiServerConnection(provider, rawKey) {
       return { ok: false, error: 'API Key aktif namun tidak memiliki akses ke model generateContent Gemini.' };
     }
 
-    const ranked = rankGeminiModels(available).filter(m => m !== 'gemini-2.5-flash');
-    const chosen = ranked.includes('gemini-3.8-flash')
-      ? 'gemini-3.8-flash'
-      : (ranked[0] || available.find(m => m !== 'gemini-2.5-flash') || 'gemini-3.8-flash');
+    const ranked = rankGeminiModels(available).filter(m => !/^gemini-(1\.5|2\.0|2\.5)/i.test(m));
+    const chosen = ranked[0] || 'gemini-3.1-flash-lite-preview';
 
     return { ok: true, model: chosen, serverLabel: 'Google Gemini AI Server' };
   } catch (err) {
@@ -3371,8 +3649,10 @@ async function fetchForexFactoryCalendar(forceRefresh = false) {
   } catch (_) {}
 
   if (!forceRefresh && cachedObj && cachedObj.weekKey === weekKey && Array.isArray(cachedObj.events) && (now - cachedObj.ts) < FF_CACHE_TTL_MS) {
+    aiState.ffRawEvents = cachedObj.events;
     aiState.ffCalendar = convertFfRawToWeeklyCalendar(cachedObj.events, weekDays);
     aiState.ffFetchedAt = cachedObj.ts;
+    updateCalendarCountdownAndAlerts();
     return aiState.ffCalendar;
   }
 
@@ -3390,8 +3670,10 @@ async function fetchForexFactoryCalendar(forceRefresh = false) {
               events: data.events
             }));
           } catch (_) {}
+          aiState.ffRawEvents = data.events;
           aiState.ffCalendar = convertFfRawToWeeklyCalendar(data.events, weekDays);
           aiState.ffFetchedAt = now;
+          updateCalendarCountdownAndAlerts();
           return aiState.ffCalendar;
         }
       }
@@ -3401,9 +3683,129 @@ async function fetchForexFactoryCalendar(forceRefresh = false) {
   const fallbackRaw = (cachedObj && cachedObj.weekKey === weekKey && Array.isArray(cachedObj.events))
     ? cachedObj.events
     : FF_FALLBACK_RAW;
+  aiState.ffRawEvents = fallbackRaw;
   aiState.ffCalendar = convertFfRawToWeeklyCalendar(fallbackRaw, weekDays);
   aiState.ffFetchedAt = cachedObj?.ts || now;
+  updateCalendarCountdownAndAlerts();
   return aiState.ffCalendar;
+}
+
+/** Ekstrak kode mata uang yang relevan untuk filter berita berdasarkan nama pair. */
+function getPairCurrencies(pair) {
+  const p = String(pair || 'XAUUSD').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!p) return ['USD'];
+  if (/XAU|GOLD|WTI|USOIL|XTI|BTC|ETH/.test(p)) return ['USD'];
+  if (p.length >= 6) return [p.slice(0, 3), p.slice(3, 6)];
+  return ['USD'];
+}
+
+/** Format durasi milidetik menjadi countdown singkat Bahasa Indonesia. */
+function formatCountdownDuration(diffMs) {
+  const totalMin = Math.max(0, Math.round(diffMs / 60000));
+  if (totalMin < 60) return `${totalMin} menit`;
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const remH = hours % 24;
+    return `${days} hari ${remH}j`;
+  }
+  return mins > 0 ? `${hours}j ${mins}m` : `${hours} jam`;
+}
+
+/** Deteksi countdown rilis berita berikutnya dan peringatan High-Impact News untuk jurnal. */
+function getUpcomingCalendarStatus(filterPair = '', nowMs = Date.now(), rawOverride = null) {
+  const raw = Array.isArray(rawOverride)
+    ? rawOverride
+    : (Array.isArray(aiState.ffRawEvents) && aiState.ffRawEvents.length ? aiState.ffRawEvents : FF_FALLBACK_RAW);
+  const wibFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  });
+  const nowParts = Object.fromEntries(wibFmt.formatToParts(new Date(nowMs)).map(p => [p.type, p.value]));
+  const todayWibISO = `${nowParts.year}-${nowParts.month}-${nowParts.day}`;
+  const pairCurs = getPairCurrencies(filterPair);
+
+  const normalized = [];
+  for (const item of raw) {
+    const imp = String(item?.impact || '');
+    const isHigh = /^high$/i.test(imp);
+    const isMed = /^medium$/i.test(imp);
+    if (!isHigh && !isMed) continue;
+    const dt = new Date(item?.date);
+    const ts = dt.getTime();
+    if (!Number.isFinite(ts)) continue;
+    const parts = Object.fromEntries(wibFmt.formatToParts(dt).map(p => [p.type, p.value]));
+    normalized.push({
+      ts,
+      diffMs: ts - nowMs,
+      diffMin: Math.round((ts - nowMs) / 60000),
+      wibDateISO: `${parts.year}-${parts.month}-${parts.day}`,
+      timeWIB: `${parts.hour}:${parts.minute} WIB`,
+      country: String(item.country || 'USD').toUpperCase(),
+      title: String(item.title || '').trim(),
+      impact: isHigh ? 'High' : 'Medium',
+      isHigh
+    });
+  }
+  normalized.sort((a, b) => a.ts - b.ts);
+
+  const imminentCandidates = normalized.filter(e => e.isHigh && e.diffMin >= -15 && e.diffMin <= 60);
+  const imminentHigh = imminentCandidates.find(e => pairCurs.includes(e.country)) || imminentCandidates[0] || null;
+  const nextEvent = normalized.find(e => e.diffMs > 0) || null;
+  const nextHighEvent = normalized.find(e => e.isHigh && e.diffMs > 0) || null;
+  const todayPairHigh = normalized.find(e => e.isHigh && e.diffMs > 0 && e.wibDateISO === todayWibISO && pairCurs.includes(e.country)) || null;
+
+  return { imminentHigh, nextEvent, nextHighEvent, todayPairHigh };
+}
+
+/** Perbarui countdown di header Kalender Ekonomi dan banner peringatan di form Jurnal Trading. */
+function updateCalendarCountdownAndAlerts() {
+  const pair = (typeof document !== 'undefined' && $('#fAsset')?.value && $('#fAsset').value !== '__custom__')
+    ? $('#fAsset').value
+    : 'XAUUSD';
+  const status = getUpcomingCalendarStatus(pair);
+
+  const cdEl = typeof document !== 'undefined' ? $('#aiCalCountdown') : null;
+  if (cdEl) {
+    const target = status.nextEvent;
+    if (target) {
+      const cdStr = formatCountdownDuration(target.diffMs);
+      const isSoon = target.diffMs <= 3600000;
+      cdEl.className = `ai-cal-countdown mono${isSoon ? ' urgent' : ''}`;
+      cdEl.textContent = `⏱️ Rilis Berikutnya: [${target.country}] ${target.title} (${target.impact.toUpperCase()}) dalam ${cdStr} · ${target.timeWIB}`;
+    } else {
+      cdEl.className = 'ai-cal-countdown mono';
+      cdEl.textContent = '';
+    }
+  }
+
+  const alertEl = typeof document !== 'undefined' ? $('#journalNewsAlert') : null;
+  if (alertEl) {
+    if (status.imminentHigh) {
+      const ev = status.imminentHigh;
+      const timingTxt = ev.diffMin >= 0
+        ? `dalam <b>${ev.diffMin} menit</b>`
+        : `baru rilis <b>${Math.abs(ev.diffMin)} menit lalu</b>`;
+      alertEl.hidden = false;
+      alertEl.className = 'news-alert-banner urgent';
+      alertEl.innerHTML = `<span>⚠️</span><div><b>PERINGATAN HIGH-IMPACT NEWS:</b> [${esc(ev.country)}] ${esc(ev.title)} ${timingTxt} (${esc(ev.timeWIB)}). Waspadai lonjakan spread &amp; slippage saat entry!</div>`;
+    } else if (status.todayPairHigh) {
+      const ev = status.todayPairHigh;
+      const cdStr = formatCountdownDuration(ev.diffMs);
+      alertEl.hidden = false;
+      alertEl.className = 'news-alert-banner upcoming';
+      alertEl.innerHTML = `<span>🔔</span><div><b>Siaga Berita Hari Ini (${esc(pair)}):</b> [${esc(ev.country)}] ${esc(ev.title)} pukul ${esc(ev.timeWIB)} (dalam <b>${cdStr}</b>). Pastikan Stop Loss terpasang rapi.</div>`;
+    } else {
+      alertEl.hidden = true;
+      alertEl.innerHTML = '';
+    }
+  }
 }
 
 function getCurrentWeekDays() {
@@ -3475,7 +3877,7 @@ function renderAiEconomicCalendar(rep) {
             <div class="ai-ec-day">${wd.dayName}</div>
             <div class="ai-ec-date mono">${wd.dateShort}</div>
           </div>
-          ${wd.isToday ? '<span class="badge win">HARI INI</span>' : ''}
+          ${wd.isToday ? '<span class="badge info">HARI INI</span>' : ''}
         </div>
         <div class="ai-ec-list">
           ${events.length ? events.map(ev => {
@@ -3489,7 +3891,7 @@ function renderAiEconomicCalendar(rep) {
               <div class="ai-ec-meta">
                 <span class="ai-ec-time mono">${esc(ev.time || 'Tentatif')}</span>
                 <span class="ai-ec-curr mono">${esc(cur)}</span>
-                <span class="badge ${isHigh ? 'loss' : 'short'}">${isHigh ? 'HIGH' : 'MED'}</span>
+                <span class="badge ${isHigh ? 'warn' : 'bee'}">${isHigh ? 'HIGH' : 'MED'}</span>
               </div>
               <div class="ai-ec-title">${esc(ev.event || '')}</div>
               ${statsHtml}
@@ -3515,11 +3917,11 @@ function renderLockedPreviewPlaceholders() {
       </div>
       <div class="ai-insight-list">
         <div class="ai-insight-item">
-          <div class="ai-ii-head"><span class="badge win">KEPATUHAN SOP</span><b>Evaluasi Konfirmasi Entry &amp; Manajemen Risiko</b></div>
+          <div class="ai-ii-head"><span class="badge info">KEPATUHAN SOP</span><b>Evaluasi Konfirmasi Entry &amp; Manajemen Risiko</b></div>
           <p>Menghubungkan narasi catatan trading Anda dengan hasil profit/loss aktual untuk menemukan setup paling presisi.</p>
         </div>
         <div class="ai-insight-item">
-          <div class="ai-ii-head"><span class="badge short">PSIKOLOGI &amp; EMOSI</span><b>Deteksi Bias FOMO, Overtrading &amp; Geser SL</b></div>
+          <div class="ai-ii-head"><span class="badge warn">PSIKOLOGI &amp; EMOSI</span><b>Deteksi Bias FOMO, Overtrading &amp; Geser SL</b></div>
           <p>Mengidentifikasi pola emosi dari teks catatan yang berpotensi menggerus ekuitas akun.</p>
         </div>
       </div>`;
@@ -3612,7 +4014,7 @@ function renderAiReportData(rep) {
   const scoreBadge = $('#aiScoreBadge');
   if (scoreBadge) {
     const sc = Number(rep.disciplineScore) || 0;
-    scoreBadge.className = 'badge ' + (sc >= 75 ? 'win' : sc >= 50 ? 'short' : 'loss');
+    scoreBadge.className = 'badge ' + (sc >= 75 ? 'info' : sc >= 50 ? 'bee' : 'warn');
     scoreBadge.textContent = rep.scoreLabel || `Skor Disiplin: ${sc}/100`;
   }
 
@@ -3621,7 +4023,7 @@ function renderAiReportData(rep) {
     const reg = String(rep.macroSentiment.regime || 'MIXED');
     const isRiskOff = reg.toUpperCase().includes('OFF') || reg.toUpperCase().includes('SAFE');
     const isRiskOn = reg.toUpperCase().includes('ON');
-    regimeBadge.className = 'badge ' + (isRiskOff ? 'short' : isRiskOn ? 'win' : 'long');
+    regimeBadge.className = 'badge ' + (isRiskOff ? 'warn' : isRiskOn ? 'info' : 'bee');
     regimeBadge.textContent = reg;
   }
 
@@ -3643,7 +4045,7 @@ function renderAiReportData(rep) {
       </div>
       <div class="ai-insight-list">
         ${insights.map(item => {
-          const bCls = item.tone === 'pos' ? 'win' : item.tone === 'neg' ? 'loss' : 'short';
+          const bCls = item.tone === 'pos' ? 'info' : item.tone === 'neg' ? 'warn' : 'bee';
           return `<div class="ai-insight-item">
             <div class="ai-ii-head">
               <span class="badge ${bCls}">${esc(item.badge || 'INSIGHT')}</span>
@@ -3669,7 +4071,6 @@ function renderAiReportData(rep) {
   if (mBox && rep.macroSentiment) {
     const ms = rep.macroSentiment;
     const cats = Array.isArray(rep.macroCatalysts) ? rep.macroCatalysts : [];
-    const sources = Array.isArray(rep.groundingSources) ? rep.groundingSources.slice(0, 4) : [];
 
     const rawUsdStatus = String(ms.usdStatus || '').toUpperCase();
     const usdSignalText = `${rawUsdStatus} ${ms.usEconomySummary || ''} ${ms.fedPolicyOutlook || ''} ${ms.portfolioImpact || ''}`.toUpperCase();
@@ -3680,7 +4081,7 @@ function renderAiReportData(rep) {
       ? /LEMAH|BURUK|BEAR|WEAK|DOVISH|MELEMAH|TERTEKAN/i.test(rawUsdStatus)
       : /PELEMAHAN DXY|DXY MELEMAH|USD MELEMAH|DOVISH|PEMANGKASAN SUKU BUNGA|USD TERTEKAN/i.test(usdSignalText));
 
-    const usdBadgeCls = isUsdStrong ? 'win' : isUsdWeak ? 'loss' : 'short';
+    const usdBadgeCls = isUsdStrong ? 'info' : 'bee';
     const usdBadgeText = isUsdStrong ? '▲ USD BAGUS / KUAT' : isUsdWeak ? '▼ USD MELEMAH' : '◆ USD NETRAL / MIXED';
     const usdBoxTone = isUsdStrong ? 'bull' : isUsdWeak ? 'bear' : 'neut';
     const defaultUsdConclusion = isUsdStrong
@@ -3709,7 +4110,7 @@ function renderAiReportData(rep) {
           <div class="ai-cat-list">
             ${cats.map(c => `
               <div class="ai-cat-row">
-                <span class="badge ${String(c.impact).toUpperCase() === 'HIGH' ? 'loss' : 'short'}">${esc(c.category || 'MAKRO')}</span>
+                <span class="badge ${String(c.impact).toUpperCase() === 'HIGH' ? 'warn' : 'bee'}">${esc(c.category || 'MAKRO')}</span>
                 <div class="ai-cat-txt"><b>${esc(c.title || '')}:</b> ${esc(c.summary || '')}</div>
               </div>
             `).join('')}
@@ -3723,12 +4124,6 @@ function renderAiReportData(rep) {
         </div>
         <p class="ai-uv-body">${esc(usdConclusionText)}</p>
       </div>
-      ${sources.length ? `
-        <div class="ai-sources-bar">
-          <span class="mono dim" style="font-size:10px">SUMBER DATA EKSTERNAL (LIVE GROUNDING):</span>
-          ${sources.map(s => `<a href="${esc(s.uri)}" target="_blank" rel="noopener noreferrer" class="ai-src-chip">${esc(trunc(s.title || s.uri, 34))} ↗</a>`).join('')}
-        </div>
-      ` : ''}
     `;
   }
 
@@ -3743,14 +4138,13 @@ function renderAiReportData(rep) {
         const rawBias = String(b.bias || 'NEUTRAL').toUpperCase();
         const isBull = rawBias.includes('BULL') || rawBias.includes('LONG');
         const isBear = rawBias.includes('BEAR') || rawBias.includes('SHORT');
-        const bCls = isBull ? 'win' : isBear ? 'loss' : 'bee';
+        const bCls = isBull ? 'info' : 'bee';
         const arrow = isBull ? '▲ BULLISH' : isBear ? '▼ BEARISH' : '◆ NEUTRAL';
         const isTraded = userPairs.has(pairName) || (pairName === 'WTI' && (userPairs.has('USOIL') || userPairs.has('XTIUSD') || userPairs.has('WTIUSD')));
         return `<div class="ai-bias-card ${isBull ? 'bull' : isBear ? 'bear' : 'neut'}${isTraded ? ' traded' : ''}">
           <div class="ai-bc-top">
             <div class="ai-bc-pair">
               <b class="mono">${esc(pairName)}</b>
-              ${isTraded ? `<span class="ai-traded-tag" title="Pair ini tercatat di jurnal Anda">★ Jurnal Anda</span>` : ''}
             </div>
             <span class="badge ${bCls}">${arrow}</span>
           </div>
@@ -3775,7 +4169,7 @@ async function runAiAnalytics(forceRefresh = false) {
 
   const arr = pt();
   const weekDays = getCurrentWeekDays();
-  const currentHash = `v5-8pairs-usd-ff:${weekDays[0].dateISO}:${state.period}:${computeTradesHash(arr)}`;
+  const currentHash = `v6-honest-pnl-ff:${weekDays[0].dateISO}:${state.period}:${computeTradesHash(arr)}`;
   if (!forceRefresh && aiState.lastReport && aiState.lastHash === currentHash) {
     renderAiReportData(aiState.lastReport);
     return;
@@ -3788,7 +4182,7 @@ async function runAiAnalytics(forceRefresh = false) {
     runBtn.textContent = '⏳ Menganalisis Catatan & Pasar...';
   }
 
-  const loadingHtml = `<div class="ai-loading-state"><div class="ai-spinner"></div><div><b>Server AI sedang menyusun laporan...</b><p class="hint">Menganalisis catatan jurnal Anda, arah bias fundamental XAUUSD &amp; Major Pairs, serta berita ekonomi AS &amp; geopolitik terkini.</p></div></div>`;
+  const loadingHtml = `<div class="ai-loading-state"><div class="ai-spinner"></div><div><b>Server AI sedang menyusun laporan...</b><p class="hint">Mengumpulkan feed Forex Factory, kurs spot, dan verifikasi Google Search grounding...</p></div></div>`;
   if (!aiState.lastReport || forceRefresh) {
     if ($('#aiJournalInsightBody')) $('#aiJournalInsightBody').innerHTML = loadingHtml;
     if ($('#aiMacroGeoBody')) $('#aiMacroGeoBody').innerHTML = loadingHtml;
@@ -3798,7 +4192,7 @@ async function runAiAnalytics(forceRefresh = false) {
 
   try {
     const needModelsFetch = aiState.provider !== 'openai' && (!Array.isArray(aiState.availableModels) || !aiState.availableModels.length);
-    const [extMarket] = await Promise.all([
+    const [extMarket, ffCal] = await Promise.all([
       fetchExternalMarketContext(),
       fetchForexFactoryCalendar(forceRefresh),
       needModelsFetch ? fetchGeminiAvailableModels(rawKey).catch(() => []) : Promise.resolve(aiState.availableModels)
@@ -3806,7 +4200,7 @@ async function runAiAnalytics(forceRefresh = false) {
     const m = metrics(arr);
     const eq = calcAccountEquity();
 
-    // Siapkan ringkasan 25 trade terakhir & catatan pengguna secara kompak
+    // Siapkan ringkasan 25 trade terakhir, P&L USD riil, & R-Multiple
     const recentTradesForPrompt = arr.slice(-25).map((t, idx) => ({
       no: idx + 1,
       date: t.date,
@@ -3815,27 +4209,40 @@ async function runAiAnalytics(forceRefresh = false) {
       lot: t.lot,
       entry: t.entry,
       exit: t.exit,
+      sl: t.sl || null,
+      pnlUsd: tradePnlUsd(t),
+      rMultiple: tradeRMultiple(t),
       returnPct: +tradeRet(t).toFixed(2),
       notes: (t.notes || '').trim() || '(Tanpa catatan)'
     }));
 
+    const rValues = arr.map(tradeRMultiple).filter(v => v != null);
+    const avgRStr = rValues.length
+      ? `${(rValues.reduce((a, b) => a + b, 0) / rValues.length) >= 0 ? '+' : ''}${(rValues.reduce((a, b) => a + b, 0) / rValues.length).toFixed(2)}R (${rValues.length} trade)`
+      : 'Belum ada SL';
+
+    const ffHighSummary = (Array.isArray(ffCal) ? ffCal : [])
+      .flatMap(d => (d.events || []).filter(ev => ev.impact === 'HIGH').map(ev => `${d.date} ${ev.time} [${ev.currency}] ${ev.event} (Fcst:${ev.forecast || '-'} Prev:${ev.previous || '-'})`))
+      .slice(0, 12);
+
     const todayStr = todayISO();
     const spots = extMarket.spotRates || {};
-    const systemPrompt = `Anda adalah Institutional Forex & Commodity (XAUUSD, WTI) Trading Coach & Global Macro Strategist. Berikan laporan analitik Bahasa Indonesia berbasis: (1) catatan jurnal trader, (2) kondisi fundamental XAUUSD (Gold), WTI (Crude Oil), & 6 Major Pairs (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF), (3) ekonomi AS (The Fed/FOMC, CPI/PCE, NFP, US Treasury Yield, DXY, inventori EIA AS) & konflik geopolitik safe haven maupun jalur energi.
-PENTING: Tulis setiap nilai string secara padat, tajam, dan ringkas (maksimal 1–2 kalimat per field) agar respons cepat selesai.
+    const systemPrompt = `Anda adalah Institutional Forex & Commodity (XAUUSD, WTI) Trading Coach & Global Macro Strategist. Berikan laporan analitik Bahasa Indonesia berbasis: (1) catatan jurnal trader & metrik P&L USD/R-Multiple riil, (2) kondisi fundamental XAUUSD (Gold), WTI (Crude Oil), & 6 Major Pairs (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF), (3) ekonomi AS (The Fed/FOMC, CPI/PCE, NFP, US Treasury Yield, DXY, inventori EIA AS) & geopolitik terkini.
+ATURAN KEJUJURAN DATA: Gunakan HANYA angka kurs/P&L dari data terstruktur di bawah ini atau temuan faktual dari Google Search grounding. JANGAN mengarang angka rilis atau jadwal berita fiktif. Tulis setiap field secara padat dan ringkas (1–2 kalimat per field).
 
-Tanggal: ${todayStr} | Spot: ${JSON.stringify(spots)}
-Akun (${periodLabel()}): Saldo $${eq.currentBalance.toFixed(2)} (Awal $${eq.initialBalance.toFixed(2)}, Growth ${eq.growthPct.toFixed(2)}%) | Trade: ${m.total} (Win ${m.wins}, Loss ${m.losses}, WR ${(m.winRate || 0).toFixed(1)}%, Avg ${(m.avg || 0).toFixed(2)}%, MaxDD ${(m.maxDD || 0).toFixed(2)}%)
+Tanggal: ${todayStr} | Kurs Spot (${extMarket.fetchedAt}): ${JSON.stringify(spots)}
+Jadwal High-Impact Resmi Forex Factory (WIB): ${JSON.stringify(ffHighSummary)}
+Akun (${periodLabel()}): Saldo $${eq.currentBalance.toFixed(2)} (Awal $${eq.initialBalance.toFixed(2)}, Net P&L $${eq.tradingProfitUsd.toFixed(2)}, Growth ${eq.growthPct.toFixed(2)}%, Avg R: ${avgRStr}) | Trade: ${m.total} (Win ${m.wins}, Loss ${m.losses}, WR ${(m.winRate || 0).toFixed(1)}%, Avg ${(m.avg || 0).toFixed(2)}%, MaxDD ${(m.maxDD || 0).toFixed(2)}%)
 Riwayat & Catatan (maks 25): ${JSON.stringify(recentTradesForPrompt)}
 
-Kembalikan HANYA JSON valid dengan struktur persis ini:
+Kembalikan HANYA JSON valid sesuai schema dengan struktur persis ini:
 {
   "disciplineScore": 80,
   "scoreLabel": "80/100 · Disiplin Terjaga",
-  "executiveSummary": "Ringkasan 2 kalimat evaluasi pola catatan jurnal, eksekusi, & psikologi trader.",
+  "executiveSummary": "Ringkasan 2 kalimat evaluasi pola catatan jurnal, eksekusi, R-multiple & psikologi trader.",
   "noteInsights": [
     {"title": "Temuan Utama Catatan Jurnal", "badge": "POLA CATATAN", "tone": "pos", "detail": "Analisis spesifik mengacu isi notes trader."},
-    {"title": "Manajemen Risiko & Lot", "badge": "RISK & LOT", "tone": "warn", "detail": "Evaluasi konsistensi lot & win/loss."},
+    {"title": "Manajemen Risiko & Lot", "badge": "RISK & LOT", "tone": "warn", "detail": "Evaluasi konsistensi lot, SL/R-multiple & win/loss."},
     {"title": "Korelasi Pair & Eksekusi", "badge": "OPTIMASI PAIR", "tone": "pos", "detail": "Wawasan performa pair di jurnal."}
   ],
   "actionPlan": ["Langkah konkret 1", "Langkah konkret 2", "Langkah konkret 3"],
@@ -3866,6 +4273,9 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
 }`;
 
     let groundingSources = [];
+    let searchQueries = [];
+    let usedGoogleSearch = false;
+    let usedModel = aiState.model || '';
     let parsedReport = null;
 
     const parseAiReportJson = text => {
@@ -3879,6 +4289,7 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
     };
 
     if (aiState.provider === 'openai') {
+      usedModel = aiState.model || 'gpt-4o-mini';
       const oRes = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -3886,13 +4297,13 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          model: aiState.model || 'gpt-4o-mini',
+          model: usedModel,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: 'You are an institutional Forex & Gold macro analyst and trading coach. Always output valid JSON.' },
+            { role: 'system', content: 'You are an institutional Forex & Gold macro analyst and trading coach. Always output valid JSON grounded strictly in supplied data.' },
             { role: 'user', content: systemPrompt }
           ],
-          temperature: 0.35
+          temperature: 0.25
         })
       }, 45000);
       if (!oRes.ok) {
@@ -3902,41 +4313,79 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
       const oJson = await oRes.json();
       parsedReport = parseAiReportJson(oJson?.choices?.[0]?.message?.content || '');
     } else {
-      // Google Gemini API (Opsi 2): gemini-3.8-flash dulu (timeout cepat 10s), lalu auto-switch ke flash-lite / model cadangan
+      // Hybrid Gemini API v1beta: Langkah 1 Google Search Grounding (tanpa responseSchema agar bebas bentrok 400),
+      // Langkah 2 fallback otomatis di model sama ke responseSchema + Data Terstruktur, Langkah 3 JSON polos.
+      if (!Array.isArray(aiState.availableModels) || !aiState.availableModels.length) {
+        await fetchGeminiAvailableModels(rawKey).catch(() => []);
+      }
+      const availSet = new Set(Array.isArray(aiState.availableModels) ? aiState.availableModels : []);
+      const isValidGeminiModel = m => m && !/^gemini-(1\.5|2\.0|2\.5)/i.test(m) && (m !== 'gemini-3.8-flash' || availSet.has('gemini-3.8-flash'));
       const tryModels = [];
       const addModel = m => {
-        if (!m || m === 'gemini-2.5-flash' || /^gemini-(1\.5|2\.0)-/i.test(m)) return;
+        if (!isValidGeminiModel(m)) return;
         if (!tryModels.includes(m)) tryModels.push(m);
       };
-      addModel('gemini-3.8-flash');
-      if (aiState.model && aiState.model !== 'gemini-3.8-flash' && aiState.model !== 'gemini-2.5-flash') {
-        addModel(aiState.model);
-      }
-      if (Array.isArray(aiState.availableModels) && aiState.availableModels.length) {
-        rankGeminiModels(aiState.availableModels).forEach(addModel);
-      }
-      GEMINI_PREFERRED_MODELS.forEach(addModel);
 
-      const candidates = tryModels.slice(0, 7);
+      if (availSet.size > 0) {
+        rankGeminiModels(aiState.availableModels).forEach(addModel);
+        if (aiState.model && availSet.has(aiState.model)) addModel(aiState.model);
+        ['gemini-3.1-flash-lite-preview', 'gemini-flash-lite-latest', 'gemini-3.1-pro-preview', 'gemini-flash-latest'].forEach(addModel);
+      } else {
+        if (aiState.model) addModel(aiState.model);
+        GEMINI_PREFERRED_MODELS.forEach(addModel);
+      }
+
+      const candidates = tryModels.slice(0, 5);
       const triedModels = [];
-      let usedModel = null;
+      usedModel = null;
+      let firstMeaningfulErr = '';
       let lastGeminiErr = 'Gagal menghubungi Gemini API.';
+      const isNotFoundMsg = msg => /is not found|no longer available|not supported for generateContent|not supported by generateContent/i.test(msg || '');
+      const recordGeminiErr = (msg, isNotFound = false) => {
+        if (!msg) return;
+        lastGeminiErr = msg;
+        if (!isNotFound && !firstMeaningfulErr) firstMeaningfulErr = msg;
+      };
+      const extractGeminiText = cand => {
+        const parts = Array.isArray(cand?.content?.parts) ? cand.content.parts : [];
+        const nonThoughtParts = parts.filter(p => !p.thought && typeof p.text === 'string');
+        return (nonThoughtParts.length ? nonThoughtParts : parts).map(p => p.text || '').join('\n');
+      };
+      const isValidParsedReport = rep => !!(rep && typeof rep === 'object' && Array.isArray(rep.pairBiases) && rep.macroSentiment);
+      const postGeminiStep = async (url, payload, timeoutMs) => {
+        const res = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: getGeminiHeaders(rawKey, true),
+          body: JSON.stringify(payload)
+        }, timeoutMs);
+        if (res.ok) {
+          return { ok: true, status: res.status, data: await res.json() };
+        }
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData?.error?.message || `Gemini HTTP ${res.status}`;
+        if (res.status === 401 || res.status === 403 || /API_KEY_INVALID|API key not valid/i.test(msg)) {
+          const authErr = new Error(msg);
+          authErr.isAuth = true;
+          throw authErr;
+        }
+        return { ok: false, status: res.status, message: msg };
+      };
 
       for (let i = 0; i < candidates.length; i++) {
         const candidate = candidates[i];
-        const attemptTimeoutMs = i === 0 ? 10000 : 25000;
+        const attemptTimeoutMs = 25000;
         const shortName = candidate.replace(/^gemini-|-preview$/gi, '');
 
         if (i === 0) {
           if (runBtn) {
             runBtn.textContent = `⏳ Menganalisis (${shortName})...`;
-            runBtn.title = `Menghubungi model utama (${candidate}) · Batas cepat 10 detik`;
+            runBtn.title = `Menghubungi model utama (${candidate}) dengan Google Search grounding`;
           }
           document.querySelectorAll('.ai-loading-state b').forEach(el => {
             el.textContent = `⏳ Menghubungi model utama (${candidate})...`;
           });
         } else {
-          const switchMsg = `⏳ Model utama sibuk/lambat, beralih ke model ${candidate}...`;
+          const switchMsg = `⏳ Model utama sibuk/limit, beralih ke model ${candidate}...`;
           if (runBtn) {
             runBtn.textContent = `⏳ Beralih ke ${shortName}...`;
             runBtn.title = switchMsg;
@@ -3945,83 +4394,108 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
         }
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(rawKey)}`;
+        let modelNotFound = false;
+
+        // Langkah 1: Google Search Grounding (tanpa responseMimeType/responseSchema agar bebas bentrok 400)
         try {
-          let gRes = await fetchWithTimeout(url, {
-            method: 'POST',
-            headers: getGeminiHeaders(rawKey, true),
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: systemPrompt }] }],
-              generationConfig: {
-                temperature: 0.25,
-                maxOutputTokens: 4096,
-                responseMimeType: 'application/json'
-              }
-            })
+          const s1 = await postGeminiStep(url, {
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            tools: [{ google_search: {} }],
+            generationConfig: { temperature: 0.2, maxOutputTokens: 8192 }
           }, attemptTimeoutMs);
 
-          if (gRes.status === 400) {
-            const bErr = await gRes.json().catch(() => ({}));
-            const bMsg = bErr?.error?.message || '';
-            if (/JSON|response_mime_type|responseMimeType/i.test(bMsg)) {
-              gRes = await fetchWithTimeout(url, {
-                method: 'POST',
-                headers: getGeminiHeaders(rawKey, true),
-                body: JSON.stringify({
-                  contents: [{ parts: [{ text: systemPrompt }] }],
-                  generationConfig: { temperature: 0.25, maxOutputTokens: 4096 }
-                })
-              }, attemptTimeoutMs);
-            } else {
-              lastGeminiErr = bMsg || `Gemini HTTP ${gRes.status}`;
-              if (/API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
-                const authErr = new Error(lastGeminiErr);
-                authErr.isAuth = true;
-                throw authErr;
-              }
-              triedModels.push(candidate);
-              continue;
+          if (s1.ok) {
+            const cand1 = s1.data?.candidates?.[0];
+            const parsed1 = parseAiReportJson(extractGeminiText(cand1));
+            if (!isValidParsedReport(parsed1)) {
+              throw new Error('Struktur JSON Google Search grounding tidak lengkap.');
             }
-          }
-
-          if (gRes.ok) {
-            const gJson = await gRes.json();
-            const cand = gJson?.candidates?.[0];
-            const candidateText = (cand?.content?.parts || []).map(p => p.text || '').join('\n');
-            parsedReport = parseAiReportJson(candidateText);
-
-            const chunks = cand?.groundingMetadata?.groundingChunks || [];
+            parsedReport = parsed1;
+            const gm = cand1?.groundingMetadata || {};
+            const chunks = Array.isArray(gm.groundingChunks) ? gm.groundingChunks : [];
             chunks.forEach(ch => {
               if (ch?.web?.uri) {
                 groundingSources.push({ title: ch.web.title || ch.web.uri, uri: ch.web.uri });
               }
             });
+            searchQueries = Array.isArray(gm.webSearchQueries) ? gm.webSearchQueries : [];
+            usedGoogleSearch = true;
             usedModel = candidate;
             break;
           }
 
-          const errData = await gRes.json().catch(() => ({}));
-          lastGeminiErr = errData?.error?.message || `Gemini HTTP ${gRes.status}`;
-          if (gRes.status === 401 || gRes.status === 403 || /API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
-            const authErr = new Error(lastGeminiErr);
-            authErr.isAuth = true;
-            throw authErr;
-          }
+          modelNotFound = s1.status === 404 || isNotFoundMsg(s1.message);
+          recordGeminiErr(s1.message, modelNotFound);
+        } catch (step1Err) {
+          const msg1 = step1Err?.message || `Gagal/timeout Google Search pada model ${candidate}`;
+          if (step1Err?.isAuth || /API_KEY_INVALID|API key not valid/i.test(msg1)) throw step1Err;
+          modelNotFound = isNotFoundMsg(msg1);
+          recordGeminiErr(msg1, modelNotFound);
+        }
+
+        if (modelNotFound) {
           triedModels.push(candidate);
-          if (i < candidates.length - 1 && (gRes.status === 503 || gRes.status === 429 || /high demand|overloaded|unavailable/i.test(lastGeminiErr))) {
-            await new Promise(r => setTimeout(r, 400));
+          continue;
+        }
+
+        // Langkah 2: Fallback di model yang sama ke Mode Data Terstruktur + responseSchema
+        if (runBtn) runBtn.textContent = `⏳ Mode Terstruktur (${shortName})...`;
+        document.querySelectorAll('.ai-loading-state b').forEach(el => {
+          el.textContent = `⏳ Beralih ke Mode Data Terstruktur + responseSchema (${candidate})...`;
+        });
+
+        try {
+          let s2 = await postGeminiStep(url, {
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 8192,
+              responseMimeType: 'application/json',
+              responseSchema: AI_REPORT_RESPONSE_SCHEMA
+            }
+          }, attemptTimeoutMs);
+
+          // Langkah 3: Jika model menolak responseSchema (HTTP 400), ulangi dengan JSON polos
+          if (!s2.ok && s2.status === 400) {
+            s2 = await postGeminiStep(url, {
+              contents: [{ parts: [{ text: systemPrompt }] }],
+              generationConfig: {
+                temperature: 0.2,
+                maxOutputTokens: 8192,
+                responseMimeType: 'application/json'
+              }
+            }, attemptTimeoutMs);
           }
-        } catch (reqErr) {
-          lastGeminiErr = reqErr?.message || `Gagal/timeout pada model ${candidate}`;
-          if (reqErr?.isAuth || /API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
-            throw reqErr;
+
+          if (s2.ok) {
+            const cand2 = s2.data?.candidates?.[0];
+            const parsed2 = parseAiReportJson(extractGeminiText(cand2));
+            if (!isValidParsedReport(parsed2)) {
+              throw new Error('Struktur JSON mode terstruktur tidak lengkap.');
+            }
+            parsedReport = parsed2;
+            usedGoogleSearch = false;
+            usedModel = candidate;
+            break;
           }
+
+          const nf2 = s2.status === 404 || isNotFoundMsg(s2.message);
+          recordGeminiErr(s2.message, nf2);
+          triedModels.push(candidate);
+          if (i < candidates.length - 1 && (s2.status === 503 || s2.status === 429 || /high demand|overloaded|unavailable/i.test(s2.message))) {
+            await new Promise(r => setTimeout(r, 350));
+          }
+        } catch (step2Err) {
+          const msg2 = step2Err?.message || `Gagal/timeout pada model ${candidate}`;
+          if (step2Err?.isAuth || /API_KEY_INVALID|API key not valid/i.test(msg2)) throw step2Err;
+          recordGeminiErr(msg2, isNotFoundMsg(msg2));
           triedModels.push(candidate);
         }
       }
 
       if (!parsedReport || !usedModel) {
         const triedStr = triedModels.length ? ` (Sudah mencoba: ${triedModels.join(', ')})` : '';
-        throw new Error(lastGeminiErr + triedStr);
+        throw new Error((firstMeaningfulErr || lastGeminiErr) + triedStr);
       }
 
       if (aiState.model !== usedModel) {
@@ -4031,10 +4505,19 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
       }
     }
 
-    parsedReport.generatedAt = Date.now();
+    const genAt = Date.now();
+    parsedReport.generatedAt = genAt;
     if (groundingSources.length) {
       parsedReport.groundingSources = groundingSources;
     }
+    parsedReport.meta = {
+      model: usedModel || aiState.model,
+      generatedAt: genAt,
+      spotFetchedAt: extMarket.fetchedAt,
+      ffFetchedAt: aiState.ffFetchedAt,
+      usedGoogleSearch,
+      searchQueries
+    };
 
     aiState.lastReport = parsedReport;
     aiState.lastHash = currentHash;
@@ -4195,7 +4678,11 @@ if ($('#aiCalFilterGroup')) {
     const btn = e.target.closest('button[data-cal-filter]');
     if (!btn) return;
     aiState.calFilter = btn.dataset.calFilter || 'all';
-    $$('#aiCalFilterGroup button').forEach(b => b.classList.toggle('active', b === btn));
+    $$('#aiCalFilterGroup button').forEach(b => {
+      const on = b === btn;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
     renderAiEconomicCalendar(aiState.lastReport || null);
   });
 }
@@ -4234,19 +4721,40 @@ function go(page) {
   }
   if (state.page === page) return; // Jangan re-render jika sudah di halaman yang sama (mencegah animasi berulang saat sentuh nav di HP)
   state.page = page;
-  $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
+  $$('.nav-item').forEach(b => {
+    const on = b.dataset.page === page;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
   $$('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
   window.scrollTo({ top: 0, behavior: REDUCED ? 'auto' : 'smooth' });
   _freshRender = true; renderAll();
 }
-function syncPeriodSeg() { $$('#periodSeg [data-p]').forEach(b => b.classList.toggle('active', b.dataset.p === state.period)) }
-function syncCumSeg() { $$('#cumSeg [data-m]').forEach(b => b.classList.toggle('active', b.dataset.m === state.cumMethod)) }
+function syncPeriodSeg() {
+  $$('#periodSeg [data-p]').forEach(b => {
+    const on = b.dataset.p === state.period;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+function syncCumSeg() {
+  $$('#cumSeg [data-m]').forEach(b => {
+    const on = b.dataset.m === state.cumMethod;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
 function setPeriod(p) {
   if (p === 'custom') {
     const pop = $('#customPop'); pop.hidden = !pop.hidden;
+    const customBtn = $('#periodSeg [data-p="custom"]');
+    if (customBtn) customBtn.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true');
     if (!pop.hidden) { $('#cpFrom').value = state.cFrom || addDays(todayISO(), -29); $('#cpTo').value = state.cTo || todayISO() } return
   }
-  $('#customPop').hidden = true; state.period = p; saveSettings(); syncPeriodSeg(); renderAll();
+  $('#customPop').hidden = true;
+  const customBtn = $('#periodSeg [data-p="custom"]');
+  if (customBtn) customBtn.setAttribute('aria-expanded', 'false');
+  state.period = p; saveSettings(); syncPeriodSeg(); renderAll();
 }
 $('#btnApplyRange').onclick = () => {
   const f = $('#cpFrom').value, t = $('#cpTo').value;
@@ -4330,6 +4838,7 @@ window.addEventListener('resize', debounce(() => {
 }, 250));
 
 /* ---- init ---- */
+initUiPreferences();
 $('#fDate').value = todayISO();
 loadPsSettings();
 loadAiConfig();
@@ -4339,6 +4848,9 @@ renderPositionSizing();
 if (!$('#fLot').value) $('#fLot').value = '0.01';
 syncPeriodSeg(); syncCumSeg(); syncPosSeg(); updatePreview(); updateFormUI();
 renderAll();
+updateCalendarCountdownAndAlerts();
+fetchForexFactoryCalendar(false).catch(() => {});
+setInterval(updateCalendarCountdownAndAlerts, 30000);
 
 if ($('#btnAuth')) $('#btnAuth').onclick = openAuthModal;
 const btnApply = $('#btnApplyUpdate');
