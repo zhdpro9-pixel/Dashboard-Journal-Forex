@@ -2807,6 +2807,24 @@ td.date-range-hit {
   .stat-value {
     font-size: 20px
   }
+
+  .top-right > #btnQuickAdd {
+    display: none !important;
+  }
+
+  body[data-page="journal"] .top-right > #btnThemeToggle,
+  body[data-page="journal"] .top-right > #btnAuth,
+  body[data-page="sizing"] .top-right > #btnThemeToggle,
+  body[data-page="sizing"] .top-right > #btnAuth,
+  body[data-page="analytics"] .top-right > #btnThemeToggle,
+  body[data-page="analytics"] .top-right > #btnAuth {
+    display: none !important;
+  }
+
+  body[data-page="journal"] .top-right,
+  body[data-page="sizing"] .top-right {
+    display: none !important;
+  }
 }
 
 /* HP portrait (≤640px) */
@@ -2852,8 +2870,8 @@ td.date-range-hit {
     white-space: nowrap
   }
 
-  .top-right > #btnAuth,
-  .top-right > #btnQuickAdd {
+  .top-right > #btnThemeToggle,
+  .top-right > #btnAuth {
     width: 100%;
     height: 36px;
     justify-content: center;

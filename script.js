@@ -4698,6 +4698,7 @@ function setPageMeta() {
   }[state.page] || ['Ringkasan Performa', ''];
   $('#pageTitle').textContent = t[0]; $('#pageSub').textContent = t[1];
   $('#periodWrap').hidden = (state.page === 'journal' || state.page === 'sizing');
+  if (document.body) document.body.dataset.page = state.page;
 }
 function renderSidebar() {
   $('#navCount').textContent = trades.length;
