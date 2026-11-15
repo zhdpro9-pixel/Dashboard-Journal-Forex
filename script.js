@@ -3496,7 +3496,11 @@ async function runAiAnalytics(forceRefresh = false) {
   }
 
   try {
-    const extMarket = await fetchExternalMarketContext();
+    const needModelsFetch = aiState.provider !== 'openai' && (!Array.isArray(aiState.availableModels) || !aiState.availableModels.length);
+    const [extMarket] = await Promise.all([
+      fetchExternalMarketContext(),
+      needModelsFetch ? fetchGeminiAvailableModels(rawKey).catch(() => []) : Promise.resolve(aiState.availableModels)
+    ]);
     const m = metrics(arr);
     const eq = calcAccountEquity();
 
@@ -3557,8 +3561,18 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
   ]
 }`;
 
-    let rawText = '';
     let groundingSources = [];
+    let parsedReport = null;
+
+    const parseAiReportJson = text => {
+      const cleaned = String(text || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace === -1 || lastBrace === -1) {
+        throw new Error('Format respons AI tidak valid. Silakan klik Perbarui Analisis.');
+      }
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    };
 
     if (aiState.provider === 'openai') {
       const oRes = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
@@ -3582,19 +3596,18 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
         throw new Error(errData?.error?.message || `OpenAI HTTP ${oRes.status}`);
       }
       const oJson = await oRes.json();
-      rawText = oJson?.choices?.[0]?.message?.content || '';
+      parsedReport = parseAiReportJson(oJson?.choices?.[0]?.message?.content || '');
     } else {
-      // Google Gemini API: Fallback lintas klaster (flash -> flash-lite -> pro) saat server utama high demand (503) / timeout
-      if (!Array.isArray(aiState.availableModels) || !aiState.availableModels.length) {
-        await fetchGeminiAvailableModels(rawKey).catch(() => []);
-      }
-
+      // Google Gemini API (Opsi 2): gemini-3.8-flash dulu (timeout cepat 10s), lalu auto-switch ke flash-lite / model cadangan
       const tryModels = [];
       const addModel = m => {
         if (!m || m === 'gemini-2.5-flash' || /^gemini-(1\.5|2\.0)-/i.test(m)) return;
         if (!tryModels.includes(m)) tryModels.push(m);
       };
       addModel('gemini-3.8-flash');
+      if (aiState.model && aiState.model !== 'gemini-3.8-flash' && aiState.model !== 'gemini-2.5-flash') {
+        addModel(aiState.model);
+      }
       if (Array.isArray(aiState.availableModels) && aiState.availableModels.length) {
         rankGeminiModels(aiState.availableModels).forEach(addModel);
       }
@@ -3602,16 +3615,26 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
 
       const candidates = tryModels.slice(0, 7);
       const triedModels = [];
-      let gJson = null;
       let usedModel = null;
       let lastGeminiErr = 'Gagal menghubungi Gemini API.';
 
       for (let i = 0; i < candidates.length; i++) {
         const candidate = candidates[i];
-        if (i > 0) {
-          const switchMsg = `⏳ Server utama lambat/padat, beralih ke model ${candidate}...`;
+        const attemptTimeoutMs = i === 0 ? 10000 : 25000;
+        const shortName = candidate.replace(/^gemini-|-preview$/gi, '');
+
+        if (i === 0) {
           if (runBtn) {
-            runBtn.textContent = `⏳ Beralih ke ${candidate.replace(/^gemini-|-preview$/gi, '')}...`;
+            runBtn.textContent = `⏳ Menganalisis (${shortName})...`;
+            runBtn.title = `Menghubungi model utama (${candidate}) · Batas cepat 10 detik`;
+          }
+          document.querySelectorAll('.ai-loading-state b').forEach(el => {
+            el.textContent = `⏳ Menghubungi model utama (${candidate})...`;
+          });
+        } else {
+          const switchMsg = `⏳ Model utama sibuk/lambat, beralih ke model ${candidate}...`;
+          if (runBtn) {
+            runBtn.textContent = `⏳ Beralih ke ${shortName}...`;
             runBtn.title = switchMsg;
           }
           document.querySelectorAll('.ai-loading-state b').forEach(el => { el.textContent = switchMsg; });
@@ -3626,11 +3649,11 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
               contents: [{ parts: [{ text: systemPrompt }] }],
               generationConfig: {
                 temperature: 0.25,
-                maxOutputTokens: 2048,
+                maxOutputTokens: 4096,
                 responseMimeType: 'application/json'
               }
             })
-          }, 45000);
+          }, attemptTimeoutMs);
 
           if (gRes.status === 400) {
             const bErr = await gRes.json().catch(() => ({}));
@@ -3641,13 +3664,15 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
                 headers: getGeminiHeaders(rawKey, true),
                 body: JSON.stringify({
                   contents: [{ parts: [{ text: systemPrompt }] }],
-                  generationConfig: { temperature: 0.25, maxOutputTokens: 2048 }
+                  generationConfig: { temperature: 0.25, maxOutputTokens: 4096 }
                 })
-              }, 45000);
+              }, attemptTimeoutMs);
             } else {
               lastGeminiErr = bMsg || `Gemini HTTP ${gRes.status}`;
               if (/API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
-                throw new Error(lastGeminiErr);
+                const authErr = new Error(lastGeminiErr);
+                authErr.isAuth = true;
+                throw authErr;
               }
               triedModels.push(candidate);
               continue;
@@ -3655,7 +3680,17 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
           }
 
           if (gRes.ok) {
-            gJson = await gRes.json();
+            const gJson = await gRes.json();
+            const cand = gJson?.candidates?.[0];
+            const candidateText = (cand?.content?.parts || []).map(p => p.text || '').join('\n');
+            parsedReport = parseAiReportJson(candidateText);
+
+            const chunks = cand?.groundingMetadata?.groundingChunks || [];
+            chunks.forEach(ch => {
+              if (ch?.web?.uri) {
+                groundingSources.push({ title: ch.web.title || ch.web.uri, uri: ch.web.uri });
+              }
+            });
             usedModel = candidate;
             break;
           }
@@ -3663,22 +3698,24 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
           const errData = await gRes.json().catch(() => ({}));
           lastGeminiErr = errData?.error?.message || `Gemini HTTP ${gRes.status}`;
           if (gRes.status === 401 || gRes.status === 403 || /API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
-            throw new Error(lastGeminiErr);
+            const authErr = new Error(lastGeminiErr);
+            authErr.isAuth = true;
+            throw authErr;
           }
           triedModels.push(candidate);
           if (i < candidates.length - 1 && (gRes.status === 503 || gRes.status === 429 || /high demand|overloaded|unavailable/i.test(lastGeminiErr))) {
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 400));
           }
         } catch (reqErr) {
           lastGeminiErr = reqErr?.message || `Gagal/timeout pada model ${candidate}`;
-          if (/API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
+          if (reqErr?.isAuth || /API_KEY_INVALID|API key not valid/i.test(lastGeminiErr)) {
             throw reqErr;
           }
           triedModels.push(candidate);
         }
       }
 
-      if (!gJson || !usedModel) {
+      if (!parsedReport || !usedModel) {
         const triedStr = triedModels.length ? ` (Sudah mencoba: ${triedModels.join(', ')})` : '';
         throw new Error(lastGeminiErr + triedStr);
       }
@@ -3688,27 +3725,8 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
         saveAiConfig();
         syncAiGateUI(false);
       }
-
-      const cand = gJson?.candidates?.[0];
-      rawText = (cand?.content?.parts || []).map(p => p.text || '').join('\n');
-
-      // Ekstrak sumber web grounding jika ada
-      const chunks = cand?.groundingMetadata?.groundingChunks || [];
-      chunks.forEach(ch => {
-        if (ch?.web?.uri) {
-          groundingSources.push({ title: ch.web.title || ch.web.uri, uri: ch.web.uri });
-        }
-      });
     }
 
-    // Parse JSON dari respons AI
-    const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace === -1 || lastBrace === -1) {
-      throw new Error('Format respons AI tidak valid. Silakan klik Perbarui Analisis.');
-    }
-    const parsedReport = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
     parsedReport.generatedAt = Date.now();
     if (groundingSources.length) {
       parsedReport.groundingSources = groundingSources;
