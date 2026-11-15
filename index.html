@@ -16,7 +16,7 @@
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
     rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link rel="stylesheet" href="style.css?v=20261115b">
+  <link rel="stylesheet" href="style.css?v=20261115d">
 </head>
 
 <body>
@@ -728,6 +728,22 @@
               <div class="card-b" id="aiFundamentalBiasBody"></div>
             </section>
 
+            <!-- Baris Paling Bawah: PILAR 4: KALENDER EKONOMI MINGGUAN (SENIN - JUMAT) -->
+            <section class="card reveal ai-card" style="--d:110ms">
+              <div class="card-h">
+                <div>
+                  <h3>4. Kalender Ekonomi &amp; Katalis Berita Mingguan (Senin – Jumat)</h3>
+                  <p class="hint" id="aiEconWeekSub">Jadwal resmi Forex Factory minggu berjalan (WIB) — High &amp; Medium Impact</p>
+                </div>
+                <div class="seg ai-cal-filters" id="aiCalFilterGroup">
+                  <button type="button" class="active" data-cal-filter="all">Semua</button>
+                  <button type="button" data-cal-filter="high">🔥 High Impact</button>
+                  <button type="button" data-cal-filter="usd">🇺🇸 Fokus USD</button>
+                </div>
+              </div>
+              <div class="card-b" id="aiEconCalendarBody"></div>
+            </section>
+
           </div>
         </div>
       </section>
@@ -739,7 +755,7 @@
   <div id="modalRoot"></div>
   <div id="authGate" class="auth-gate" hidden></div>
 
-  <script src="script.js?v=20261115b"></script>
+  <script src="script.js?v=20261115d"></script>
 </body>
 
 </html>

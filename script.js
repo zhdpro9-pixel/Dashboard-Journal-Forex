@@ -3028,7 +3028,10 @@ const aiState = {
   lastHash: '',
   lastReport: null,
   isRunning: false,
-  gateOpen: false
+  gateOpen: false,
+  calFilter: 'all',
+  ffCalendar: null,
+  ffFetchedAt: 0
 };
 
 function getGeminiHeaders(rawKey, withJson = false) {
@@ -3244,10 +3247,266 @@ async function fetchExternalMarketContext() {
   return out;
 }
 
+const LS_FF_CAL = 'fx_ff_calendar_v1';
+const FF_CACHE_TTL_MS = 30 * 60 * 1000;
+
+// Snapshot resmi Forex Factory (High & Medium Impact) untuk pratinjau lokal & cadangan saat offline
+const FF_FALLBACK_RAW = [
+  { title: 'CPI m/m', country: 'CAD', date: '2026-11-16T08:30:00-05:00', impact: 'High', forecast: '0.3%', previous: '0.1%' },
+  { title: 'Median CPI y/y', country: 'CAD', date: '2026-11-16T08:30:00-05:00', impact: 'High', forecast: '2.0%', previous: '1.9%' },
+  { title: 'Trimmed CPI y/y', country: 'CAD', date: '2026-11-16T08:30:00-05:00', impact: 'High', forecast: '1.9%', previous: '1.8%' },
+  { title: 'Common CPI y/y', country: 'CAD', date: '2026-11-16T08:30:00-05:00', impact: 'Medium', forecast: '2.5%', previous: '2.4%' },
+  { title: 'Fed Chairman Warsh Speaks', country: 'USD', date: '2026-11-16T12:00:00-05:00', impact: 'High', forecast: '', previous: '' },
+  { title: 'RBA Gov Bullock Speaks', country: 'AUD', date: '2026-11-16T17:50:00-05:00', impact: 'High', forecast: '', previous: '' },
+  { title: 'Inflation Expectations q/q', country: 'NZD', date: '2026-11-16T21:00:00-05:00', impact: 'High', forecast: '', previous: '2.34%' },
+  { title: 'Average Earnings Index 3m/y', country: 'GBP', date: '2026-11-17T02:00:00-05:00', impact: 'Medium', forecast: '3.5%', previous: '3.7%' },
+  { title: 'Core Retail Sales m/m', country: 'USD', date: '2026-11-17T08:30:00-05:00', impact: 'High', forecast: '0.4%', previous: '0.9%' },
+  { title: 'Retail Sales m/m', country: 'USD', date: '2026-11-17T08:30:00-05:00', impact: 'High', forecast: '0.2%', previous: '0.8%' },
+  { title: 'Wage Price Index q/q', country: 'AUD', date: '2026-11-17T19:30:00-05:00', impact: 'Medium', forecast: '0.9%', previous: '0.8%' },
+  { title: 'CPI y/y', country: 'GBP', date: '2026-11-18T02:00:00-05:00', impact: 'High', forecast: '3.6%', previous: '3.5%' },
+  { title: 'BOE Gov Bailey Speaks', country: 'GBP', date: '2026-11-18T02:30:00-05:00', impact: 'High', forecast: '', previous: '' },
+  { title: 'ECB Financial Stability Review', country: 'EUR', date: '2026-11-18T04:00:00-05:00', impact: 'Medium', forecast: '', previous: '' },
+  { title: 'ECB President Lagarde Speaks', country: 'EUR', date: '2026-11-18T09:25:00-05:00', impact: 'Medium', forecast: '', previous: '' },
+  { title: 'BOE Gov Bailey Speaks', country: 'GBP', date: '2026-11-18T10:00:00-05:00', impact: 'High', forecast: '', previous: '' },
+  { title: 'RBNZ Gov Breman Speaks', country: 'NZD', date: '2026-11-18T13:00:00-05:00', impact: 'Medium', forecast: '', previous: '' },
+  { title: 'FOMC Meeting Minutes', country: 'USD', date: '2026-11-18T14:00:00-05:00', impact: 'High', forecast: '', previous: '' },
+  { title: 'Employment Change', country: 'AUD', date: '2026-11-18T19:30:00-05:00', impact: 'High', forecast: '25.2K', previous: '-39.3K' },
+  { title: 'Unemployment Rate', country: 'AUD', date: '2026-11-18T19:30:00-05:00', impact: 'High', forecast: '4.7%', previous: '4.7%' },
+  { title: 'ECB President Lagarde Speaks', country: 'EUR', date: '2026-11-19T08:30:00-05:00', impact: 'Medium', forecast: '', previous: '' },
+  { title: 'Philly Fed Manufacturing Index', country: 'USD', date: '2026-11-19T08:30:00-05:00', impact: 'Medium', forecast: '19.2', previous: '20.9' },
+  { title: 'Unemployment Claims', country: 'USD', date: '2026-11-19T08:30:00-05:00', impact: 'Medium', forecast: '199K', previous: '200K' },
+  { title: 'Retail Sales m/m', country: 'GBP', date: '2026-11-20T02:00:00-05:00', impact: 'Medium', forecast: '0.0%', previous: '-0.4%' },
+  { title: 'ECB President Lagarde Speaks', country: 'EUR', date: '2026-11-20T03:15:00-05:00', impact: 'Medium', forecast: '', previous: '' },
+  { title: 'FOMC Member Waller Speaks', country: 'USD', date: '2026-11-20T08:25:00-05:00', impact: 'Medium', forecast: '', previous: '' },
+  { title: 'Revised UoM Consumer Sentiment', country: 'USD', date: '2026-11-20T10:00:00-05:00', impact: 'Medium', forecast: '52.1', previous: '51.0' },
+  { title: 'Revised UoM Inflation Expectations', country: 'USD', date: '2026-11-20T10:00:00-05:00', impact: 'Medium', forecast: '', previous: '4.3%' }
+];
+
+const FF_NOTE_RULES = [
+  [/cpi|inflation|pce|ppi/i, 'Data inflasi utama; angka lebih tinggi dari perkiraan cenderung hawkish bagi mata uang terkait.'],
+  [/fomc|fed|powell|warsh|waller/i, 'Sinyal arah suku bunga The Fed; penggerak langsung DXY, US Yield, XAUUSD & Major Pairs.'],
+  [/retail sales|consumer sentiment|uom/i, 'Indikator belanja konsumen; lebih kuat dari estimasi umumnya positif untuk mata uang.'],
+  [/employment|unemployment|claims|payroll|earnings|wage/i, 'Data pasar tenaga kerja; memengaruhi prospek suku bunga & volatilitas pair terkait.'],
+  [/oil|crude|eia/i, 'Katalis langsung pasokan & arah harga minyak mentah (WTI / USOIL) serta CAD.'],
+  [/speaks|gov|president|boe|ecb|rba|rbnz|boj/i, 'Pidato gubernur bank sentral; pantau nada hawkish/dovish terhadap pergerakan pair.'],
+  [/pmi|manufacturing|gdp|philly/i, 'Data aktivitas ekonomi; deviasi signifikan memicu volatilitas jangka pendek.']
+];
+
+const FF_PAIR_HINTS = {
+  USD: 'Penggerak utama USD, XAUUSD & Major Pairs.',
+  EUR: 'Berdampak langsung pada EURUSD & cross EUR.',
+  GBP: 'Berdampak langsung pada GBPUSD & cross GBP.',
+  JPY: 'Berdampak langsung pada USDJPY & yen cross.',
+  CAD: 'Berdampak langsung pada USDCAD & sentimen minyak.',
+  AUD: 'Berdampak langsung pada AUDUSD.',
+  NZD: 'Berdampak langsung pada NZDUSD.',
+  CHF: 'Berdampak langsung pada USDCHF & safe haven.'
+};
+
+/** Bangun catatan dampak singkat Bahasa Indonesia untuk event Forex Factory. */
+function buildFfEventNote(item) {
+  const title = String(item?.title || '');
+  const cur = String(item?.country || 'USD').toUpperCase();
+  const hit = FF_NOTE_RULES.find(([rx]) => rx.test(title));
+  return hit ? hit[1] : (FF_PAIR_HINTS[cur] || 'Rilis terjadwal dari kalender Forex Factory.');
+}
+
+/** Konversi array mentah Forex Factory ke struktur 5 hari Senin-Jumat dalam WIB (UTC+7). */
+function convertFfRawToWeeklyCalendar(rawItems, weekDays) {
+  const days = Array.isArray(weekDays) ? weekDays : getCurrentWeekDays();
+  const buckets = new Map(days.map(wd => [wd.dateISO, []]));
+  const wibFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  });
+
+  const list = Array.isArray(rawItems) ? rawItems : [];
+  for (const item of list) {
+    const impactRaw = String(item?.impact || '');
+    const isHigh = /^high$/i.test(impactRaw);
+    const isMed = /^medium$/i.test(impactRaw);
+    if (!isHigh && !isMed) continue;
+
+    const dt = new Date(item?.date);
+    if (!Number.isFinite(dt.getTime())) continue;
+
+    const parts = Object.fromEntries(wibFmt.formatToParts(dt).map(p => [p.type, p.value]));
+    const wibDateISO = `${parts.year}-${parts.month}-${parts.day}`;
+    const bucket = buckets.get(wibDateISO);
+    if (!bucket) continue;
+
+    bucket.push({
+      ts: dt.getTime(),
+      time: `${parts.hour}:${parts.minute} WIB`,
+      currency: String(item.country || 'USD').toUpperCase(),
+      impact: isHigh ? 'HIGH' : 'MEDIUM',
+      event: String(item.title || '').trim(),
+      forecast: String(item.forecast || '').trim(),
+      previous: String(item.previous || '').trim(),
+      note: buildFfEventNote(item)
+    });
+  }
+
+  return days.map(wd => ({
+    day: wd.dayName,
+    date: wd.dateISO,
+    events: (buckets.get(wd.dateISO) || []).sort((a, b) => a.ts - b.ts)
+  }));
+}
+
+/** Ambil feed resmi Forex Factory melalui proxy Vercel /api/calendar dengan cache & fallback lokal. */
+async function fetchForexFactoryCalendar(forceRefresh = false) {
+  const weekDays = getCurrentWeekDays();
+  const weekKey = weekDays[0]?.dateISO || '';
+  const now = Date.now();
+  let cachedObj = null;
+
+  try {
+    cachedObj = JSON.parse(localStorage.getItem(LS_FF_CAL) || 'null');
+  } catch (_) {}
+
+  if (!forceRefresh && cachedObj && cachedObj.weekKey === weekKey && Array.isArray(cachedObj.events) && (now - cachedObj.ts) < FF_CACHE_TTL_MS) {
+    aiState.ffCalendar = convertFfRawToWeeklyCalendar(cachedObj.events, weekDays);
+    aiState.ffFetchedAt = cachedObj.ts;
+    return aiState.ffCalendar;
+  }
+
+  if (typeof location !== 'undefined' && location.protocol.startsWith('http')) {
+    try {
+      const res = await fetchWithTimeout('/api/calendar', {}, 4500);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.events) && data.events.length) {
+          try {
+            localStorage.setItem(LS_FF_CAL, JSON.stringify({
+              ts: now,
+              weekKey,
+              source: data.source || 'forexfactory',
+              events: data.events
+            }));
+          } catch (_) {}
+          aiState.ffCalendar = convertFfRawToWeeklyCalendar(data.events, weekDays);
+          aiState.ffFetchedAt = now;
+          return aiState.ffCalendar;
+        }
+      }
+    } catch (_) {}
+  }
+
+  const fallbackRaw = (cachedObj && cachedObj.weekKey === weekKey && Array.isArray(cachedObj.events))
+    ? cachedObj.events
+    : FF_FALLBACK_RAW;
+  aiState.ffCalendar = convertFfRawToWeeklyCalendar(fallbackRaw, weekDays);
+  aiState.ffFetchedAt = cachedObj?.ts || now;
+  return aiState.ffCalendar;
+}
+
+function getCurrentWeekDays() {
+  const now = new Date();
+  const dow = now.getDay();
+  const diffToMon = dow === 0 ? 1 : dow === 6 ? 2 : 1 - dow;
+  const mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffToMon);
+  const todayStr = todayISO();
+  const names = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
+  return names.map((dayName, idx) => {
+    const d = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + idx);
+    const dIso = iso(d);
+    const dateShort = `${pad(d.getDate())} ${MONTHS[d.getMonth()]}`;
+    return {
+      dayName,
+      dateISO: dIso,
+      dateShort,
+      fullLabel: `${dayName}, ${dateShort} ${d.getFullYear()}`,
+      isToday: dIso === todayStr
+    };
+  });
+}
+
+function renderAiEconomicCalendar(rep) {
+  const calBox = $('#aiEconCalendarBody');
+  if (!calBox) return;
+
+  const weekDays = getCurrentWeekDays();
+  const subEl = $('#aiEconWeekSub');
+  if (subEl && weekDays.length === 5) {
+    subEl.textContent = `Jadwal resmi Forex Factory minggu ini (${weekDays[0].dateShort} – ${weekDays[4].dateShort} ${weekDays[4].dateISO.slice(0, 4)} · WIB) — High & Medium Impact`;
+  }
+
+  const ffCal = Array.isArray(aiState.ffCalendar) && aiState.ffCalendar.length
+    ? aiState.ffCalendar
+    : convertFfRawToWeeklyCalendar(FF_FALLBACK_RAW, weekDays);
+  const rawList = ffCal;
+
+  const filterMode = aiState.calFilter || 'all';
+  calBox.innerHTML = `<div class="ai-econ-grid">
+    ${weekDays.map((wd, idx) => {
+      const matchedDay =
+        rawList.find(d => String(d.date || '').trim() === wd.dateISO) ||
+        rawList.find(d => String(d.day || '').toUpperCase().includes(wd.dayName.toUpperCase())) ||
+        rawList[idx] ||
+        null;
+
+      let events = Array.isArray(matchedDay?.events) ? matchedDay.events : [];
+
+      events = events.filter(ev => {
+        const imp = String(ev.impact || '').toUpperCase();
+        const cur = String(ev.currency || '').toUpperCase();
+        if (filterMode === 'high') return imp.includes('HIGH');
+        if (filterMode === 'usd') {
+          return cur === 'USD' || /XAU|GOLD|WTI|OIL|DXY/.test(cur) || /FED|FOMC|EIA|NFP|UOM|PHILLY/i.test(String(ev.event || ''));
+        }
+        return true;
+      });
+
+      const emptyLabel = filterMode === 'high'
+        ? 'Tidak ada jadwal High Impact di hari ini.'
+        : filterMode === 'usd'
+          ? 'Tidak ada jadwal Fokus USD di hari ini.'
+          : 'Tidak ada rilis High/Medium Impact di hari ini.';
+
+      return `<div class="ai-ec-col${wd.isToday ? ' today' : ''}">
+        <div class="ai-ec-head">
+          <div>
+            <div class="ai-ec-day">${wd.dayName}</div>
+            <div class="ai-ec-date mono">${wd.dateShort}</div>
+          </div>
+          ${wd.isToday ? '<span class="badge win">HARI INI</span>' : ''}
+        </div>
+        <div class="ai-ec-list">
+          ${events.length ? events.map(ev => {
+            const imp = String(ev.impact || 'MEDIUM').toUpperCase();
+            const isHigh = imp.includes('HIGH');
+            const cur = String(ev.currency || 'USD').toUpperCase();
+            const statsHtml = (ev.forecast || ev.previous)
+              ? `<div class="ai-ec-stats mono">${ev.forecast ? `<span class="ai-ec-stat">Fcst: <b>${esc(ev.forecast)}</b></span>` : ''}${ev.previous ? `<span class="ai-ec-stat">Prev: <b>${esc(ev.previous)}</b></span>` : ''}</div>`
+              : '';
+            return `<div class="ai-ec-item ${isHigh ? 'high' : 'med'}">
+              <div class="ai-ec-meta">
+                <span class="ai-ec-time mono">${esc(ev.time || 'Tentatif')}</span>
+                <span class="ai-ec-curr mono">${esc(cur)}</span>
+                <span class="badge ${isHigh ? 'loss' : 'short'}">${isHigh ? 'HIGH' : 'MED'}</span>
+              </div>
+              <div class="ai-ec-title">${esc(ev.event || '')}</div>
+              ${statsHtml}
+              ${ev.note ? `<div class="ai-ec-note">${esc(ev.note)}</div>` : ''}
+            </div>`;
+          }).join('') : `<div class="ai-ec-empty">${emptyLabel}</div>`}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 function renderLockedPreviewPlaceholders() {
   const jBox = $('#aiJournalInsightBody');
   const mBox = $('#aiMacroGeoBody');
   const fBox = $('#aiFundamentalBiasBody');
+  const calBox = $('#aiEconCalendarBody');
   if (jBox && !jBox.innerHTML.trim()) {
     jBox.innerHTML = `
       <div class="ai-exec-box">
@@ -3292,6 +3551,9 @@ function renderLockedPreviewPlaceholders() {
         <div class="ai-bc-top"><b>${p}</b><span class="badge bee">MENUNGGU AI</span></div>
         <div class="ai-bc-driver">Verifikasi API Key untuk membuka arah bias fundamental &amp; katalis makro terkini.</div>
       </div>`).join('')}</div>`;
+  }
+  if (calBox && !calBox.innerHTML.trim()) {
+    renderAiEconomicCalendar(aiState.lastReport);
   }
 }
 
@@ -3500,6 +3762,9 @@ function renderAiReportData(rep) {
       }).join('')}
     </div>`;
   }
+
+  // 4. Render Kalender Ekonomi Mingguan (Senin - Jumat)
+  renderAiEconomicCalendar(rep);
 }
 
 async function runAiAnalytics(forceRefresh = false) {
@@ -3509,7 +3774,8 @@ async function runAiAnalytics(forceRefresh = false) {
   if (aiState.isRunning) return;
 
   const arr = pt();
-  const currentHash = `v3-8pairs-usd:${state.period}:${computeTradesHash(arr)}`;
+  const weekDays = getCurrentWeekDays();
+  const currentHash = `v5-8pairs-usd-ff:${weekDays[0].dateISO}:${state.period}:${computeTradesHash(arr)}`;
   if (!forceRefresh && aiState.lastReport && aiState.lastHash === currentHash) {
     renderAiReportData(aiState.lastReport);
     return;
@@ -3527,12 +3793,14 @@ async function runAiAnalytics(forceRefresh = false) {
     if ($('#aiJournalInsightBody')) $('#aiJournalInsightBody').innerHTML = loadingHtml;
     if ($('#aiMacroGeoBody')) $('#aiMacroGeoBody').innerHTML = loadingHtml;
     if ($('#aiFundamentalBiasBody')) $('#aiFundamentalBiasBody').innerHTML = loadingHtml;
+    if ($('#aiEconCalendarBody')) $('#aiEconCalendarBody').innerHTML = loadingHtml;
   }
 
   try {
     const needModelsFetch = aiState.provider !== 'openai' && (!Array.isArray(aiState.availableModels) || !aiState.availableModels.length);
     const [extMarket] = await Promise.all([
       fetchExternalMarketContext(),
+      fetchForexFactoryCalendar(forceRefresh),
       needModelsFetch ? fetchGeminiAvailableModels(rawKey).catch(() => []) : Promise.resolve(aiState.availableModels)
     ]);
     const m = metrics(arr);
@@ -3553,7 +3821,7 @@ async function runAiAnalytics(forceRefresh = false) {
 
     const todayStr = todayISO();
     const spots = extMarket.spotRates || {};
-    const systemPrompt = `Anda adalah Institutional Forex & Commodity (XAUUSD, WTI) Trading Coach & Global Macro Strategist. Berikan laporan analitik Bahasa Indonesia berbasis: (1) catatan jurnal trader, (2) kondisi fundamental XAUUSD (Gold), WTI (Crude Oil), & 6 Major Pairs (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF), (3) ekonomi AS (The Fed/FOMC, CPI/PCE, NFP, US Treasury Yield, DXY, inventori EIA AS) & konflik geopolitik safe haven maupun jalur energi (Emas/XAUUSD, Minyak/WTI, USD, JPY, CHF).
+    const systemPrompt = `Anda adalah Institutional Forex & Commodity (XAUUSD, WTI) Trading Coach & Global Macro Strategist. Berikan laporan analitik Bahasa Indonesia berbasis: (1) catatan jurnal trader, (2) kondisi fundamental XAUUSD (Gold), WTI (Crude Oil), & 6 Major Pairs (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF), (3) ekonomi AS (The Fed/FOMC, CPI/PCE, NFP, US Treasury Yield, DXY, inventori EIA AS) & konflik geopolitik safe haven maupun jalur energi.
 PENTING: Tulis setiap nilai string secara padat, tajam, dan ringkas (maksimal 1–2 kalimat per field) agar respons cepat selesai.
 
 Tanggal: ${todayStr} | Spot: ${JSON.stringify(spots)}
@@ -3780,6 +4048,7 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
       renderAiReportData(aiState.lastReport);
     } else {
       renderLockedPreviewPlaceholders();
+      renderAiEconomicCalendar(null);
     }
   } finally {
     aiState.isRunning = false;
@@ -3793,6 +4062,13 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
 
 function renderAiPage() {
   syncAiGateUI(false);
+  if (!aiState.ffCalendar) {
+    fetchForexFactoryCalendar(false).then(() => {
+      if (!aiState.isRunning) renderAiEconomicCalendar(aiState.lastReport);
+    });
+  } else if (!aiState.isRunning) {
+    renderAiEconomicCalendar(aiState.lastReport);
+  }
   if (aiState.verified && getDecodedAiKey()) {
     if (aiState.lastReport) {
       renderAiReportData(aiState.lastReport);
@@ -3912,6 +4188,16 @@ if ($('#btnDisconnectAiKey')) {
 
 if ($('#btnRunAiAnalysis')) {
   $('#btnRunAiAnalysis').onclick = () => runAiAnalytics(true);
+}
+
+if ($('#aiCalFilterGroup')) {
+  $('#aiCalFilterGroup').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-cal-filter]');
+    if (!btn) return;
+    aiState.calFilter = btn.dataset.calFilter || 'all';
+    $$('#aiCalFilterGroup button').forEach(b => b.classList.toggle('active', b === btn));
+    renderAiEconomicCalendar(aiState.lastReport || null);
+  });
 }
 
 /* ================= navigasi & periode ================= */

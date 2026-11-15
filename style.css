@@ -4346,6 +4346,177 @@ td.date-range-hit {
   color: var(--gold);
 }
 
+/* Weekly Economic Calendar (5 Columns Mon-Fri) */
+.ai-cal-filters {
+  flex-shrink: 0;
+}
+
+.ai-cal-filters button {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.ai-econ-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+@media(max-width:1080px) {
+  .ai-econ-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.ai-ec-col {
+  background: #0d0d10;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-ec-col.today {
+  border-color: rgba(245, 158, 11, .5);
+  box-shadow: inset 0 2px 0 var(--gold);
+  background: linear-gradient(180deg, rgba(245, 158, 11, .06), #0d0d10 38%);
+}
+
+.ai-ec-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 7px;
+  border-bottom: 1px dashed var(--line2);
+}
+
+.ai-ec-day {
+  font: 700 13px/1.2 var(--font-d);
+  color: var(--text);
+}
+
+.ai-ec-col.today .ai-ec-day {
+  color: var(--gold);
+}
+
+.ai-ec-date {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+.ai-ec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 1;
+  max-height: 350px;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
+.ai-ec-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.ai-ec-list::-webkit-scrollbar-thumb {
+  background: var(--line2);
+  border-radius: 2px;
+}
+
+.ai-ec-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 2.5px solid var(--gold);
+  border-radius: 3px;
+  padding: 8px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-ec-item.high {
+  border-left-color: var(--red);
+}
+
+.ai-ec-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.ai-ec-time {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+.ai-ec-curr {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel2);
+  border: 1px solid var(--line2);
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+.ai-ec-meta .badge {
+  margin-left: auto;
+  font-size: 9.5px;
+  padding: 1px 5px;
+}
+
+.ai-ec-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.38;
+}
+
+.ai-ec-note {
+  font-size: 11.2px;
+  color: var(--mut);
+  line-height: 1.42;
+}
+
+.ai-ec-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.ai-ec-stat {
+  font-size: 10.5px;
+  color: var(--dim);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 1px 5px;
+}
+
+.ai-ec-stat b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ai-ec-empty {
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 14px 6px;
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+}
+
 /* Loading State */
 .ai-loading-state {
   display: flex;
