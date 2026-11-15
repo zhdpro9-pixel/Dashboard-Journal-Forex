@@ -4693,7 +4693,7 @@ function setPageMeta() {
     overview: ['Ringkasan Performa', `Pertumbuhan akun & konsistensi — ${periodLabel()}`],
     journal: ['Jurnal Trading', 'Catat, validasi, dan evaluasi setiap trade'],
     sizing: ['Position Sizing', 'Kalkulator ukuran lot ideal sesuai modal, dan Risiko'],
-    analytics: ['Analitik', `Pola performa, drawdown & perbandingan posisi — ${periodLabel()}`],
+    analytics: ['Analitik', 'Pola performa, drawdown & perbandingan posisi'],
     ai: ['Analitik AI', `Wawasan catatan jurnal, bias fundamental XAUUSD & major pairs, serta makro ekonomi AS & geopolitik — ${periodLabel()}`]
   }[state.page] || ['Ringkasan Performa', ''];
   $('#pageTitle').textContent = t[0]; $('#pageSub').textContent = t[1];
