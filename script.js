@@ -3276,6 +3276,13 @@ function renderLockedPreviewPlaceholders() {
           <div class="ai-mb-tag">🌍 KONFLIK GEOPOLITIK &amp; ARUS SAFE HAVEN</div>
           <p>Menganalisis dampak eskalasi geopolitik global terhadap lonjakan permintaan aset safe haven (XAUUSD, USD, JPY, CHF).</p>
         </div>
+      </div>
+      <div class="ai-usd-verdict-box">
+        <div class="ai-uv-head">
+          <div class="ai-exec-title">💵 KESIMPULAN DOLAR AS (USD / INDEKS DXY)</div>
+          <span class="badge bee">MENUNGGU AI</span>
+        </div>
+        <p class="ai-uv-body">Kesimpulan apakah Dolar AS sedang bagus/kuat atau melemah beserta dampaknya ke pair mayor &amp; komoditas akan tampil di sini.</p>
       </div>`;
   }
   if (fBox && !fBox.innerHTML.trim()) {
@@ -3401,6 +3408,26 @@ function renderAiReportData(rep) {
     const ms = rep.macroSentiment;
     const cats = Array.isArray(rep.macroCatalysts) ? rep.macroCatalysts : [];
     const sources = Array.isArray(rep.groundingSources) ? rep.groundingSources.slice(0, 4) : [];
+
+    const rawUsdStatus = String(ms.usdStatus || '').toUpperCase();
+    const usdSignalText = `${rawUsdStatus} ${ms.usEconomySummary || ''} ${ms.fedPolicyOutlook || ''} ${ms.portfolioImpact || ''}`.toUpperCase();
+    const isUsdStrong = rawUsdStatus
+      ? /KUAT|BAGUS|BULL|STRONG|HAWKISH|MENGUAT/i.test(rawUsdStatus)
+      : /PENGUATAN DXY|DXY MENGUAT|USD KUAT|USD MENGUAT|HAWKISH|MENAHAN SUKU BUNGA|IMBAL HASIL NAIK|MENEKAN KOMODITAS/i.test(usdSignalText);
+    const isUsdWeak = !isUsdStrong && (rawUsdStatus
+      ? /LEMAH|BURUK|BEAR|WEAK|DOVISH|MELEMAH|TERTEKAN/i.test(rawUsdStatus)
+      : /PELEMAHAN DXY|DXY MELEMAH|USD MELEMAH|DOVISH|PEMANGKASAN SUKU BUNGA|USD TERTEKAN/i.test(usdSignalText));
+
+    const usdBadgeCls = isUsdStrong ? 'win' : isUsdWeak ? 'loss' : 'short';
+    const usdBadgeText = isUsdStrong ? '▲ USD BAGUS / KUAT' : isUsdWeak ? '▼ USD MELEMAH' : '◆ USD NETRAL / MIXED';
+    const usdBoxTone = isUsdStrong ? 'bull' : isUsdWeak ? 'bear' : 'neut';
+    const defaultUsdConclusion = isUsdStrong
+      ? 'Dolar AS (USD/DXY) sedang dalam kondisi kuat dan solid didukung sentimen suku bunga The Fed serta yield obligasi AS. Pair XXX/USD (EURUSD, GBPUSD, XAUUSD) cenderung tertekan, sedangkan USD/XXX (USDJPY, USDCAD) berpotensi mendapat dorongan naik.'
+      : isUsdWeak
+        ? 'Dolar AS (USD/DXY) sedang cenderung melemah sehingga memberi ruang penguatan pada aset lawan USD seperti XAUUSD, EURUSD, dan GBPUSD.'
+        : 'Kekuatan Dolar AS (USD/DXY) masih cenderung netral/fluktuatif sambil menunggu katalis data ekonomi AS terbaru; perhatikan arah DXY sebelum entry.';
+    const usdConclusionText = ms.usdConclusion || defaultUsdConclusion;
+
     mBox.innerHTML = `
       <div class="ai-macro-grid">
         <div class="ai-macro-box">
@@ -3427,6 +3454,13 @@ function renderAiReportData(rep) {
           </div>
         </div>
       ` : ''}
+      <div class="ai-usd-verdict-box ${usdBoxTone}">
+        <div class="ai-uv-head">
+          <div class="ai-exec-title">💵 KESIMPULAN DOLAR AS (USD / INDEKS DXY)</div>
+          <span class="badge ${usdBadgeCls}">${usdBadgeText}</span>
+        </div>
+        <p class="ai-uv-body">${esc(usdConclusionText)}</p>
+      </div>
       ${sources.length ? `
         <div class="ai-sources-bar">
           <span class="mono dim" style="font-size:10px">SUMBER DATA EKSTERNAL (LIVE GROUNDING):</span>
@@ -3475,7 +3509,7 @@ async function runAiAnalytics(forceRefresh = false) {
   if (aiState.isRunning) return;
 
   const arr = pt();
-  const currentHash = `v2-8pairs:${state.period}:${computeTradesHash(arr)}`;
+  const currentHash = `v3-8pairs-usd:${state.period}:${computeTradesHash(arr)}`;
   if (!forceRefresh && aiState.lastReport && aiState.lastHash === currentHash) {
     renderAiReportData(aiState.lastReport);
     return;
@@ -3542,7 +3576,9 @@ Kembalikan HANYA JSON valid dengan struktur persis ini:
     "usEconomySummary": "Ringkasan ekonomi AS terkini (inflasi, NFP, GDP, DXY).",
     "fedPolicyOutlook": "Prospek suku bunga The Fed (FOMC) & US Treasury Yield.",
     "geopoliticalSafeHaven": "Dampak konflik geopolitik terkini terhadap permintaan safe haven (XAUUSD, USD, JPY, CHF) & risiko pasokan energi WTI.",
-    "portfolioImpact": "Dampak makro AS & geopolitik ke pair utama di jurnal trader."
+    "portfolioImpact": "Dampak makro AS & geopolitik ke pair utama di jurnal trader.",
+    "usdStatus": "KUAT (BULLISH) | MELEMAH (BEARISH) | NETRAL (MIXED)",
+    "usdConclusion": "Kesimpulan tegas apakah Dolar AS saat ini sedang bagus/kuat atau tidak beserta alasannya dan implikasi ke pair XXX/USD vs USD/XXX."
   },
   "macroCatalysts": [
     {"category": "EKONOMI AS / THE FED", "title": "Kebijakan The Fed & Data AS", "impact": "HIGH", "summary": "Dampak rilis data AS ke USD, WTI, & XAUUSD."},
