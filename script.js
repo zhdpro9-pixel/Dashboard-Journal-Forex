@@ -1723,10 +1723,10 @@ function renderStatCards(m, arr) {
     box.innerHTML =
       statCard(0, 'Total Trades', `<span id="vTotal"></span>`, `${m.wins}W · ${m.losses}L${m.be ? ` · ${m.be} BE` : ''} · ${days} hari aktif`, 'kpi-secondary') +
       statCard(1, 'Win Rate', `<span id="vWR"></span>`, `<div class="wl-bar" style="width:100%"><i class="w" style="width:${wrW}%"></i><i class="l" style="width:${wrL}%"></i></div>`, 'kpi-primary') +
-      statCard(2, 'Avg Return / Trade', `<span id="vAvg"></span>`, 'Rata-rata return — hanya trade tercatat', 'kpi-secondary') +
+      statCard(2, 'Avg Return / Trade', `<span id="vAvg"></span>`, 'Rata-rata return', 'kpi-secondary') +
       statCard(3, 'Cumulative Return', `<span id="vCum"></span>`, `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px">${sparkSVG(series)}<span>${state.cumMethod === 'comp' ? 'Compounded' : 'Simple'}</span></div>`, 'kpi-primary') +
       statCard(4, 'Best Trade', `<span id="vBest"></span>`, best ? `${esc(best.asset) || '—'} · ${fmtDate(best.date)} · ${best.position}` : '—', 'kpi-secondary') +
-      statCard(5, 'Max Drawdown', `<span id="vDD"></span>`, 'Compounded · puncak → lembah', 'kpi-primary');
+      statCard(5, 'Max Drawdown', `<span id="vDD"></span>`, 'Compounded', 'kpi-primary');
   }
 
   if (_freshRender || isInitialBuild) {
@@ -2000,17 +2000,17 @@ function renderEquityStrip() {
   box.innerHTML = `
     <div class="eq-strip-grid">
       <div class="eq-item eq-main">
-        <div class="eq-label">SALDO SAAT INI (SISA MODAL)</div>
+        <div class="eq-label">SALDO SAAT INI</div>
         <div class="eq-val mono">${fmtUsd(eq.currentBalance)}</div>
         <div class="eq-sub">${flowParts.join(' · ')}</div>
       </div>
       <div class="eq-item">
-        <div class="eq-label">PROFIT / LOSS TRADING ($)</div>
+        <div class="eq-label">PROFIT / LOSS</div>
         <div class="eq-val mono ${pnlCls}">${pnlArrow}${fmtUsd(Math.abs(eq.tradingProfitUsd))}</div>
-        <div class="eq-sub">Murni dari ${trades.length} trade · Opsi B (Compounded)</div>
+        <div class="eq-sub">Dari ${trades.length} trade</div>
       </div>
       <div class="eq-item">
-        <div class="eq-label">GROWTH MODAL (%)</div>
+        <div class="eq-label">GROWTH MODAL</div>
         <div class="eq-val mono ${grCls}">${grArrow}${fmtPct(eq.growthPct)}</div>
         <div class="eq-sub">Total Modal Bersih: <b class="mono">${fmtUsd(eq.netInjected)}</b></div>
       </div>
@@ -3217,7 +3217,7 @@ $('#btnInfo').onclick = () => infoBox('Metrik & Penyimpanan', `
     <dt>Drawdown</dt><dd>Penurunan dari puncak kumulatif sebelumnya ke titik kumulatif berikutnya (metode compounded).</dd>
   </dl>
   <p class="mmsg">Return perubahan harga <b>bukan</b> return modal aktual — leverage, ukuran posisi, dan biaya membuat hasil nyata berbeda. Dashboard ini tidak mengklaim profit dalam rupiah.</p>
-  <dl><dt>Penyimpanan</dt><dd>Data disimpan di <b>localStorage browser</b>: persisten antar refresh, tetapi hanya di perangkat &amp; browser ini, tidak tersinkron, dan ikut terhapus bila data browsing dibersihkan. Gunakan ekspor CSV sebagai backup. Database server dapat dihubungkan kemudian tanpa mengubah struktur data.</dd></dl>`);
+  <dl><dt>Penyimpanan</dt><dd>Data jurnal dan modal otomatis tersinkron ke <b>Cloud</b> selama akun login, serta disimpan di <b>localStorage browser</b> sebagai cache offline agar tetap cepat dibuka. Gunakan <b>Ekspor CSV</b> sebagai cadangan berkala.</dd></dl>`);
 
 /* ================= ANALITIK AI (DESKTOP ONLY · VERIFIED API KEY GATE) ================= */
 const LS_AI_FALLBACK = 'tjd.ai.v1';
