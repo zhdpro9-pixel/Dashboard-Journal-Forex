@@ -56,7 +56,7 @@ function getPreferredTheme() {
   try {
     const saved = localStorage.getItem(LS_UI_THEME);
     if (saved === 'light' || saved === 'dark') return saved;
-  } catch (_) {}
+  } catch (_) { }
   return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
@@ -64,7 +64,7 @@ function applyTheme(theme, persist = false) {
   const mode = theme === 'light' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', mode);
   if (persist) {
-    try { localStorage.setItem(LS_UI_THEME, mode); } catch (_) {}
+    try { localStorage.setItem(LS_UI_THEME, mode); } catch (_) { }
   }
   const btn = $('#btnThemeToggle');
   if (btn) {
@@ -88,7 +88,7 @@ function initUiPreferences() {
   if (mq && mq.addEventListener) {
     mq.addEventListener('change', e => {
       let hasManual = false;
-      try { hasManual = !!localStorage.getItem(LS_UI_THEME); } catch (_) {}
+      try { hasManual = !!localStorage.getItem(LS_UI_THEME); } catch (_) { }
       if (!hasManual) applyTheme(e.matches ? 'light' : 'dark', false);
     });
   }
@@ -106,7 +106,7 @@ function loadAccounts() {
   catch (e) { return {}; }
 }
 function saveAccounts(acc) {
-  try { localStorage.setItem(LS_ACCOUNTS, JSON.stringify(acc)); } catch (e) {}
+  try { localStorage.setItem(LS_ACCOUNTS, JSON.stringify(acc)); } catch (e) { }
 }
 function getAccountRecord(email) {
   if (!email) return null;
@@ -172,7 +172,7 @@ function getUserTradesKey() {
   try {
     const active = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
     if (active && active.email) return 'tjd.trades.u.' + active.email.toLowerCase();
-  } catch (_) {}
+  } catch (_) { }
   return LS_KEY;
 }
 const TJD_META_RX = /\s*<!--TJD_META:(\{[\s\S]*?\})-->\s*$/;
@@ -217,13 +217,13 @@ function loadTrades() {
     const deletedSet = getDeletedTradeIds(currentUser?.email);
     return Array.isArray(r)
       ? r.filter(t => t && t.date && t.entry > 0 && t.exit > 0 && !deletedSet.has(String(t.id))).map(t => {
-          if (t.lot == null && t.capital != null) t.lot = 0.10;
-          const unpacked = unpackCloudNotes(t.notes);
-          if (unpacked.sl != null && t.sl == null) t.sl = unpacked.sl;
-          if (unpacked.pnlUsd != null && t.pnlUsd == null) t.pnlUsd = unpacked.pnlUsd;
-          t.notes = unpacked.cleanNotes;
-          return t;
-        })
+        if (t.lot == null && t.capital != null) t.lot = 0.10;
+        const unpacked = unpackCloudNotes(t.notes);
+        if (unpacked.sl != null && t.sl == null) t.sl = unpacked.sl;
+        if (unpacked.pnlUsd != null && t.pnlUsd == null) t.pnlUsd = unpacked.pnlUsd;
+        t.notes = unpacked.cleanNotes;
+        return t;
+      })
       : [];
   } catch (e) {
     return [];
@@ -233,7 +233,7 @@ function saveTrades() {
   try {
     const key = getUserTradesKey();
     localStorage.setItem(key, JSON.stringify(trades));
-  } catch (e) {}
+  } catch (e) { }
 }
 function loadSettings() { try { const s = JSON.parse(localStorage.getItem(LS_SET) || '{}'); if (s.period) state.period = s.period; if (s.cumMethod) state.cumMethod = s.cumMethod } catch (e) { } }
 function saveSettings() { try { localStorage.setItem(LS_SET, JSON.stringify({ period: state.period, cumMethod: state.cumMethod })) } catch (e) { } }
@@ -247,7 +247,7 @@ function getUserCapitalKey() {
   try {
     const active = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
     if (active && active.email) return 'tjd.capital.u.' + active.email.toLowerCase();
-  } catch (_) {}
+  } catch (_) { }
   return LS_CAP_FALLBACK;
 }
 function loadCapitalConfig() {
@@ -266,7 +266,7 @@ function loadCapitalConfig() {
         updatedAt: Number(parsed.updatedAt || 0)
       };
     }
-  } catch (_) {}
+  } catch (_) { }
   return { initialBalance: 1000, autoSyncPs: true, flows: [], updatedAt: 0 };
 }
 let capitalConfig = loadCapitalConfig();
@@ -285,7 +285,7 @@ function saveCapitalConfig(syncCloud = true) {
   capitalConfig.updatedAt = Date.now();
   try {
     localStorage.setItem(getUserCapitalKey(), JSON.stringify(capitalConfig));
-  } catch (_) {}
+  } catch (_) { }
   if (syncCloud) syncCapitalToCloud();
 }
 
@@ -667,7 +667,7 @@ function isPageReload() {
     if (window.performance && window.performance.navigation) {
       return window.performance.navigation.type === 1;
     }
-  } catch (_) {}
+  } catch (_) { }
   return false;
 }
 
@@ -679,7 +679,7 @@ function markSessionUnlocked(email) {
     } else {
       sessionStorage.removeItem(SS_PIN_UNLOCKED);
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function isSessionUnlocked(email) {
@@ -689,7 +689,7 @@ function isSessionUnlocked(email) {
   // 1. Cek sessionStorage (standar tab browser aktif)
   try {
     if (sessionStorage.getItem(SS_PIN_UNLOCKED) === em) return true;
-  } catch (_) {}
+  } catch (_) { }
 
   // 2. Cek apakah ini adalah refresh halaman (F5 / tarik refresh di HP / tombol reload)
   if (isPageReload()) {
@@ -704,17 +704,17 @@ function isSessionUnlocked(email) {
       markSessionUnlocked(em);
       return true;
     }
-  } catch (_) {}
+  } catch (_) { }
 
   return false;
 }
 
 // Catat waktu unload saat halaman di-refresh atau ditutup
 window.addEventListener('beforeunload', () => {
-  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) {}
+  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) { }
 });
 window.addEventListener('pagehide', () => {
-  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) {}
+  try { localStorage.setItem(LS_LAST_UNLOAD, String(Date.now())); } catch (_) { }
 });
 
 let gateState = {
@@ -735,7 +735,7 @@ function saveUserPin(email, pin) {
   if (!email || !/^\d{4}$/.test(pin)) return;
   upsertAccountRecord(email, { pin });
   if (sbClient && currentUser && !currentUser.isLocalOnly) {
-    sbClient.auth.updateUser({ data: { pin } }).catch(() => {});
+    sbClient.auth.updateUser({ data: { pin } }).catch(() => { });
   }
 }
 
@@ -751,7 +751,7 @@ function setActiveUserSession(userObj) {
     } else {
       localStorage.removeItem(LS_ACTIVE_USER);
     }
-  } catch (_) {}
+  } catch (_) { }
   updateAuthUI();
 }
 
@@ -791,7 +791,7 @@ async function tryUpgradeToCloud(email, rawPass) {
       });
       if (signInData?.user) return signInData.user;
     }
-  } catch (_) {}
+  } catch (_) { }
   return null;
 }
 
@@ -890,7 +890,7 @@ async function checkForRemoteUpdates() {
     if (cloudHash !== localHash) {
       await syncFromCloud(false);
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 async function syncFromCloud(showFeedback = false) {
@@ -929,12 +929,12 @@ async function syncFromCloud(showFeedback = false) {
             flows: Array.isArray(cloudCap.flows) ? cloudCap.flows : [],
             updatedAt: Number(cloudCap.updatedAt || Date.now())
           };
-          try { localStorage.setItem(getUserCapitalKey(), JSON.stringify(capitalConfig)); } catch (_) {}
+          try { localStorage.setItem(getUserCapitalKey(), JSON.stringify(capitalConfig)); } catch (_) { }
         } else if (Number(localCap.updatedAt || 0) > Number(cloudCap.updatedAt || 0)) {
           syncCapitalToCloud();
         }
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // 1. Ambil custom pairs jika ada
     try {
@@ -945,7 +945,7 @@ async function syncFromCloud(showFeedback = false) {
         saveCustomPairs(merged);
         populateAssetSelect($('#fAsset')?.value || '');
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // 2. Ambil trades milik user ini dari Supabase Cloud
     const { data, error } = await sbClient
@@ -1026,7 +1026,7 @@ async function syncFromCloud(showFeedback = false) {
     const newHash = computeTradesHash(finalTrades);
     trades = finalTrades;
     saveTrades();
-    try { localStorage.setItem(initKey, '1'); } catch (_) {}
+    try { localStorage.setItem(initKey, '1'); } catch (_) { }
     renderAll();
 
     if (showFeedback) {
@@ -1150,7 +1150,7 @@ function renderAuthGate() {
         </div>
 
         <div class="pin-pad" id="pinPad">
-          ${[1,2,3,4,5,6,7,8,9].map(n => `<button type="button" class="pin-btn" data-k="${n}">${n}</button>`).join('')}
+          ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" class="pin-btn" data-k="${n}">${n}</button>`).join('')}
           <button type="button" class="pin-btn fn" data-k="clear">Ulang</button>
           <button type="button" class="pin-btn" data-k="0">0</button>
           <button type="button" class="pin-btn fn" data-k="back">⌫</button>
@@ -1171,7 +1171,7 @@ function renderAuthGate() {
       showGate('auth', { tab: 'login', prefillEmail: email, forceNewPin: true });
     };
     $('#btnSwitchAcc').onclick = async () => {
-      if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) {} }
+      if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) { } }
       markSessionUnlocked(null);
       setActiveUserSession(null);
       showGate('auth', { tab: 'login', prefillEmail: '' });
@@ -1202,7 +1202,7 @@ function renderAuthGate() {
         </div>
 
         <div class="pin-pad" id="pinPad">
-          ${[1,2,3,4,5,6,7,8,9].map(n => `<button type="button" class="pin-btn" data-k="${n}">${n}</button>`).join('')}
+          ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" class="pin-btn" data-k="${n}">${n}</button>`).join('')}
           <button type="button" class="pin-btn fn" data-k="clear">Ulang</button>
           <button type="button" class="pin-btn" data-k="0">0</button>
           <button type="button" class="pin-btn fn" data-k="back">⌫</button>
@@ -1232,8 +1232,8 @@ function renderAuthGate() {
       ${brandHTML}
       <h2 class="auth-title">${isLogin ? 'Selamat Datang Kembali' : 'Buat Akun Trader Baru'}</h2>
       <p class="auth-sub">${isLogin
-        ? 'Masuk ke akun Anda untuk mengakses dan menyinkronkan jurnal trading di Laptop & HP.'
-        : 'Daftarkan email & kata sandi Anda, lalu atur PIN 4 angka untuk akses masuk cepat.'}</p>
+      ? 'Masuk ke akun Anda untuk mengakses dan menyinkronkan jurnal trading di Laptop & HP.'
+      : 'Daftarkan email & kata sandi Anda, lalu atur PIN 4 angka untuk akses masuk cepat.'}</p>
 
       <div class="auth-tabs">
         <button type="button" class="auth-tab ${isLogin ? 'active' : ''}" data-tab="login">Masuk (Login)</button>
@@ -1434,7 +1434,7 @@ async function performUserAuth(tab, email, password) {
             return { id: retryData.user.id, email, isLocalOnly: false };
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // 3. Cek akun yang tersimpan di perangkat
@@ -1527,7 +1527,7 @@ async function initAuth() {
   let savedUser = null;
   try {
     savedUser = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
-  } catch (_) {}
+  } catch (_) { }
 
   // Jika hanya refresh halaman dalam sesi yang sama (belum keluar/tutup aplikasi), langsung sembunyikan gate tanpa kedip
   const gate = $('#authGate');
@@ -1557,7 +1557,7 @@ async function initAuth() {
         };
         setActiveUserSession(savedUser);
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   if (savedUser && savedUser.email) {
@@ -1677,7 +1677,7 @@ function openAuthModal() {
     });
     if (ok) {
       close();
-      if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) {} }
+      if (sbClient) { try { await sbClient.auth.signOut(); } catch (_) { } }
       markSessionUnlocked(null);
       setActiveUserSession(null);
       toast('Berhasil keluar dari akun');
@@ -2556,7 +2556,7 @@ $('#tPos').addEventListener('change', e => { state.j.pos = e.target.value; rende
   if (!el) return;
   el.addEventListener('click', () => {
     if (typeof el.showPicker === 'function') {
-      try { el.showPicker(); } catch (_) {}
+      try { el.showPicker(); } catch (_) { }
     }
   });
 });
@@ -3327,7 +3327,7 @@ function getUserAiKey() {
   try {
     const active = JSON.parse(localStorage.getItem(LS_ACTIVE_USER) || 'null');
     if (active && active.email) return 'tjd.ai.u.' + active.email.toLowerCase();
-  } catch (_) {}
+  } catch (_) { }
   return LS_AI_FALLBACK;
 }
 
@@ -3361,7 +3361,7 @@ function loadAiConfig() {
       aiState.lastHash = parsed.lastHash || '';
       aiState.lastReport = parsed.lastReport || null;
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function saveAiConfig() {
@@ -3375,7 +3375,7 @@ function saveAiConfig() {
       lastHash: aiState.lastHash,
       lastReport: aiState.lastReport
     }));
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function setAiConnStatus(type, html) {
@@ -3441,7 +3441,7 @@ async function fetchGeminiAvailableModels(rawKey) {
     try {
       const errJson = await res.json();
       if (errJson?.error?.message) msg = errJson.error.message;
-    } catch (_) {}
+    } catch (_) { }
     throw new Error(msg);
   }
   const data = await res.json();
@@ -3469,7 +3469,7 @@ async function verifyAiServerConnection(provider, rawKey) {
         try {
           const errJson = await res.json();
           if (errJson?.error?.message) msg = errJson.error.message;
-        } catch (_) {}
+        } catch (_) { }
         return { ok: false, error: msg };
       }
       const data = await res.json();
@@ -3521,7 +3521,7 @@ async function fetchExternalMarketContext() {
         };
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   return out;
 }
 
@@ -3646,7 +3646,7 @@ async function fetchForexFactoryCalendar(forceRefresh = false) {
 
   try {
     cachedObj = JSON.parse(localStorage.getItem(LS_FF_CAL) || 'null');
-  } catch (_) {}
+  } catch (_) { }
 
   if (!forceRefresh && cachedObj && cachedObj.weekKey === weekKey && Array.isArray(cachedObj.events) && (now - cachedObj.ts) < FF_CACHE_TTL_MS) {
     aiState.ffRawEvents = cachedObj.events;
@@ -3669,7 +3669,7 @@ async function fetchForexFactoryCalendar(forceRefresh = false) {
               source: data.source || 'forexfactory',
               events: data.events
             }));
-          } catch (_) {}
+          } catch (_) { }
           aiState.ffRawEvents = data.events;
           aiState.ffCalendar = convertFfRawToWeeklyCalendar(data.events, weekDays);
           aiState.ffFetchedAt = now;
@@ -3677,7 +3677,7 @@ async function fetchForexFactoryCalendar(forceRefresh = false) {
           return aiState.ffCalendar;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   const fallbackRaw = (cachedObj && cachedObj.weekKey === weekKey && Array.isArray(cachedObj.events))
@@ -3847,31 +3847,31 @@ function renderAiEconomicCalendar(rep) {
   const filterMode = aiState.calFilter || 'all';
   calBox.innerHTML = `<div class="ai-econ-grid">
     ${weekDays.map((wd, idx) => {
-      const matchedDay =
-        rawList.find(d => String(d.date || '').trim() === wd.dateISO) ||
-        rawList.find(d => String(d.day || '').toUpperCase().includes(wd.dayName.toUpperCase())) ||
-        rawList[idx] ||
-        null;
+    const matchedDay =
+      rawList.find(d => String(d.date || '').trim() === wd.dateISO) ||
+      rawList.find(d => String(d.day || '').toUpperCase().includes(wd.dayName.toUpperCase())) ||
+      rawList[idx] ||
+      null;
 
-      let events = Array.isArray(matchedDay?.events) ? matchedDay.events : [];
+    let events = Array.isArray(matchedDay?.events) ? matchedDay.events : [];
 
-      events = events.filter(ev => {
-        const imp = String(ev.impact || '').toUpperCase();
-        const cur = String(ev.currency || '').toUpperCase();
-        if (filterMode === 'high') return imp.includes('HIGH');
-        if (filterMode === 'usd') {
-          return cur === 'USD' || /XAU|GOLD|WTI|OIL|DXY/.test(cur) || /FED|FOMC|EIA|NFP|UOM|PHILLY/i.test(String(ev.event || ''));
-        }
-        return true;
-      });
+    events = events.filter(ev => {
+      const imp = String(ev.impact || '').toUpperCase();
+      const cur = String(ev.currency || '').toUpperCase();
+      if (filterMode === 'high') return imp.includes('HIGH');
+      if (filterMode === 'usd') {
+        return cur === 'USD' || /XAU|GOLD|WTI|OIL|DXY/.test(cur) || /FED|FOMC|EIA|NFP|UOM|PHILLY/i.test(String(ev.event || ''));
+      }
+      return true;
+    });
 
-      const emptyLabel = filterMode === 'high'
-        ? 'Tidak ada jadwal High Impact di hari ini.'
-        : filterMode === 'usd'
-          ? 'Tidak ada jadwal Fokus USD di hari ini.'
-          : 'Tidak ada rilis High/Medium Impact di hari ini.';
+    const emptyLabel = filterMode === 'high'
+      ? 'Tidak ada jadwal High Impact di hari ini.'
+      : filterMode === 'usd'
+        ? 'Tidak ada jadwal Fokus USD di hari ini.'
+        : 'Tidak ada rilis High/Medium Impact di hari ini.';
 
-      return `<div class="ai-ec-col${wd.isToday ? ' today' : ''}">
+    return `<div class="ai-ec-col${wd.isToday ? ' today' : ''}">
         <div class="ai-ec-head">
           <div>
             <div class="ai-ec-day">${wd.dayName}</div>
@@ -3881,13 +3881,13 @@ function renderAiEconomicCalendar(rep) {
         </div>
         <div class="ai-ec-list">
           ${events.length ? events.map(ev => {
-            const imp = String(ev.impact || 'MEDIUM').toUpperCase();
-            const isHigh = imp.includes('HIGH');
-            const cur = String(ev.currency || 'USD').toUpperCase();
-            const statsHtml = (ev.forecast || ev.previous)
-              ? `<div class="ai-ec-stats mono">${ev.forecast ? `<span class="ai-ec-stat">Fcst: <b>${esc(ev.forecast)}</b></span>` : ''}${ev.previous ? `<span class="ai-ec-stat">Prev: <b>${esc(ev.previous)}</b></span>` : ''}</div>`
-              : '';
-            return `<div class="ai-ec-item ${isHigh ? 'high' : 'med'}">
+      const imp = String(ev.impact || 'MEDIUM').toUpperCase();
+      const isHigh = imp.includes('HIGH');
+      const cur = String(ev.currency || 'USD').toUpperCase();
+      const statsHtml = (ev.forecast || ev.previous)
+        ? `<div class="ai-ec-stats mono">${ev.forecast ? `<span class="ai-ec-stat">Fcst: <b>${esc(ev.forecast)}</b></span>` : ''}${ev.previous ? `<span class="ai-ec-stat">Prev: <b>${esc(ev.previous)}</b></span>` : ''}</div>`
+        : '';
+      return `<div class="ai-ec-item ${isHigh ? 'high' : 'med'}">
               <div class="ai-ec-meta">
                 <span class="ai-ec-time mono">${esc(ev.time || 'Tentatif')}</span>
                 <span class="ai-ec-curr mono">${esc(cur)}</span>
@@ -3897,10 +3897,10 @@ function renderAiEconomicCalendar(rep) {
               ${statsHtml}
               ${ev.note ? `<div class="ai-ec-note">${esc(ev.note)}</div>` : ''}
             </div>`;
-          }).join('') : `<div class="ai-ec-empty">${emptyLabel}</div>`}
+    }).join('') : `<div class="ai-ec-empty">${emptyLabel}</div>`}
         </div>
       </div>`;
-    }).join('')}
+  }).join('')}
   </div>`;
 }
 
@@ -4045,15 +4045,15 @@ function renderAiReportData(rep) {
       </div>
       <div class="ai-insight-list">
         ${insights.map(item => {
-          const bCls = item.tone === 'pos' ? 'info' : item.tone === 'neg' ? 'warn' : 'bee';
-          return `<div class="ai-insight-item">
+      const bCls = item.tone === 'pos' ? 'info' : item.tone === 'neg' ? 'warn' : 'bee';
+      return `<div class="ai-insight-item">
             <div class="ai-ii-head">
               <span class="badge ${bCls}">${esc(item.badge || 'INSIGHT')}</span>
               <b>${esc(item.title || '')}</b>
             </div>
             <p>${esc(item.detail || '')}</p>
           </div>`;
-        }).join('')}
+    }).join('')}
       </div>
       ${actions.length ? `
         <div class="ai-action-box">
@@ -4134,14 +4134,14 @@ function renderAiReportData(rep) {
     const userPairs = new Set(trades.map(t => (t.asset || '').toUpperCase()));
     fBox.innerHTML = `<div class="ai-bias-grid">
       ${biases.map(b => {
-        const pairName = String(b.pair || '').toUpperCase();
-        const rawBias = String(b.bias || 'NEUTRAL').toUpperCase();
-        const isBull = rawBias.includes('BULL') || rawBias.includes('LONG');
-        const isBear = rawBias.includes('BEAR') || rawBias.includes('SHORT');
-        const bCls = isBull ? 'info' : 'bee';
-        const arrow = isBull ? '▲ BULLISH' : isBear ? '▼ BEARISH' : '◆ NEUTRAL';
-        const isTraded = userPairs.has(pairName) || (pairName === 'WTI' && (userPairs.has('USOIL') || userPairs.has('XTIUSD') || userPairs.has('WTIUSD')));
-        return `<div class="ai-bias-card ${isBull ? 'bull' : isBear ? 'bear' : 'neut'}${isTraded ? ' traded' : ''}">
+      const pairName = String(b.pair || '').toUpperCase();
+      const rawBias = String(b.bias || 'NEUTRAL').toUpperCase();
+      const isBull = rawBias.includes('BULL') || rawBias.includes('LONG');
+      const isBear = rawBias.includes('BEAR') || rawBias.includes('SHORT');
+      const bCls = isBull ? 'info' : 'bee';
+      const arrow = isBull ? '▲ BULLISH' : isBear ? '▼ BEARISH' : '◆ NEUTRAL';
+      const isTraded = userPairs.has(pairName) || (pairName === 'WTI' && (userPairs.has('USOIL') || userPairs.has('XTIUSD') || userPairs.has('WTIUSD')));
+      return `<div class="ai-bias-card ${isBull ? 'bull' : isBear ? 'bear' : 'neut'}${isTraded ? ' traded' : ''}">
           <div class="ai-bc-top">
             <div class="ai-bc-pair">
               <b class="mono">${esc(pairName)}</b>
@@ -4153,7 +4153,7 @@ function renderAiReportData(rep) {
           ${b.keyContext ? `<div class="ai-bc-ctx"><b>Fokus Makro:</b> ${esc(b.keyContext)}</div>` : ''}
           ${b.userAlignment ? `<div class="ai-bc-align"><b>Evaluasi Posisi Anda:</b> ${esc(b.userAlignment)}</div>` : ''}
         </div>`;
-      }).join('')}
+    }).join('')}
     </div>`;
   }
 
@@ -4692,7 +4692,7 @@ function setPageMeta() {
   const t = {
     overview: ['Ringkasan Performa', `Pertumbuhan akun & konsistensi — ${periodLabel()}`],
     journal: ['Jurnal Trading', 'Catat, validasi, dan evaluasi setiap trade'],
-    sizing: ['Position Sizing', 'Kalkulator ukuran lot ideal sesuai modal, batas risiko, dan jarak Stop Loss'],
+    sizing: ['Position Sizing', 'Kalkulator ukuran lot ideal sesuai modal, dan Risiko'],
     analytics: ['Analitik', `Pola performa, drawdown & perbandingan posisi — ${periodLabel()}`],
     ai: ['Analitik AI', `Wawasan catatan jurnal, bias fundamental XAUUSD & major pairs, serta makro ekonomi AS & geopolitik — ${periodLabel()}`]
   }[state.page] || ['Ringkasan Performa', ''];
@@ -4850,7 +4850,7 @@ if (!$('#fLot').value) $('#fLot').value = '0.01';
 syncPeriodSeg(); syncCumSeg(); syncPosSeg(); updatePreview(); updateFormUI();
 renderAll();
 updateCalendarCountdownAndAlerts();
-fetchForexFactoryCalendar(false).catch(() => {});
+fetchForexFactoryCalendar(false).catch(() => { });
 setInterval(updateCalendarCountdownAndAlerts, 30000);
 
 if ($('#btnAuth')) $('#btnAuth').onclick = openAuthModal;
